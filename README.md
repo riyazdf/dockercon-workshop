@@ -31,7 +31,16 @@ By default, Docker runs containers with the `docker-default` AppArmor profile, w
        docker-default (28462)
     ```
 
+    Enforce mode will actively deny various operations due to the AppArmor profile; complain mode will only log profile violations but not block any functionality.
+
 3.  Now kill that container and start another alpine container, but this time without an AppArmor profile.  In order to disable AppArmor, we must pass an additional flag to Docker: `docker run --rm -it --security-opt apparmor=unconfined alpine sh`.  Check `apparmor_status` in another terminal to confirm that this container is not running with a profile.
+
+4.  Let's understand the default AppArmor profile, and the defense-in-depth of the Docker engine profiles.  AppArmor works together with Seccomp and a capabilities whitelist to provide security by default:
+	- Disable seccomp and add the `SYS_ADMIN` capability while running an Ubuntu container: `docker run --rm -it --cap-add SYS_ADMIN --security-opt seccomp=unconfined ubuntu sh`
+
+	- Make two directories and run mount to bind them: `mkdir 1; mkdir 2; mount --bind 1 2` -- you should receive a permissions error because the `docker-default` AppArmor profile will deny mount!
+
+	- To convince yourself this is the case, run the same commands with AppArmor also disabled: `docker run --rm -it --cap-add SYS_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=unconfined ubuntu sh`
 
 
 ## Our Custom AppArmor Profile
@@ -63,3 +72,25 @@ However, note that an attacker would not be able to easily pivot to view underly
 8.  Parse the `wparmor` again and bring back up your docker-compose wordpress instance.  Test that your AppArmor profile is correct by successfully uploading an image to the site via the wordpress UI, but not being able to upload a plugin to wordpress.  Note that if the usual upload flow for a plugin fails, wordpress will point you to a FTP upload page.  Also test that you're still able to upload a photo from the media tab.
 
 If you've completed the last step successfully, congratulations!  You've secured a wordpress instance against adding malicious plugins :)
+
+
+## Extra for Experts
+
+AppArmor profiles are quite application-specific -- while we've had some practice at writing our own profiles, wouldn't it be nice to have some tools for debugging and generating AppArmor profiles?  We'll explore `aa-complain` and `aa-genprof` to help us achieve these goals.
+
+1.  On Ubuntu, start by installing `apparmor-utils`:
+
+    `sudo apt install apparmor-utils`
+
+    `apparmor-utils` will install our two tools, as well as other helpful tools.  For more information about this package, read [Ubuntu's guide](https://help.ubuntu.com/lts/serverguide/apparmor.html).
+
+
+2.  Debug AppArmor profiles with `aa-complain`: as described earlier, AppArmor has a "complain" mode of operation that does not actively block any violations to its security profile, but will instead log these events.  This is a fantastic tool for debugging, let's try viewing docker's default profile:
+
+    `sudo aa-complain /etc/apparmor.d/docker`
+
+    You can confirm that this set the `docker-default` policy to complain mode by running `apparmor_status`.  To view any complaints from apparmor, run `dmesg`.  Unfortunately an `aa-complain` equivalent is not currently supported in Docker (but pull requests welcome!)
+
+3.  Automatically generating AppArmor profiles with `aa-genprof`
+
+4.  Refining profiles with `aa-logprof`
