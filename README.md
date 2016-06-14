@@ -76,7 +76,7 @@ If you've completed the last step successfully, congratulations!  You've secured
 
 ## Extra for Experts
 
-AppArmor profiles are quite application-specific -- while we've had some practice at writing our own profiles, wouldn't it be nice to have some tools for debugging and generating AppArmor profiles?  We'll explore `aa-complain` and `aa-genprof` to help us achieve these goals.
+AppArmor profiles are quite application-specific -- while we've had some practice at writing our own profiles by hand, wouldn't it be nice to have some tools for debugging and generating AppArmor profiles?  We'll explore `aa-complain` and `aa-genprof` to help us achieve these goals.
 
 1.  On Ubuntu, start by installing `apparmor-utils`:
 
@@ -85,12 +85,19 @@ AppArmor profiles are quite application-specific -- while we've had some practic
     `apparmor-utils` will install our two tools, as well as other helpful tools.  For more information about this package, read [Ubuntu's guide](https://help.ubuntu.com/lts/serverguide/apparmor.html).
 
 
-2.  Debug AppArmor profiles with `aa-complain`: as described earlier, AppArmor has a "complain" mode of operation that does not actively block any violations to its security profile, but will instead log these events.  This is a fantastic tool for debugging, let's try viewing docker's default profile:
+2.  Let's use these tools with the Firefox app. Let's start with automatically generating AppArmor profiles with `aa-genprof`:
 
-    `sudo aa-complain /etc/apparmor.d/docker`
+	`sudo aa-genprof firefox`
 
-    You can confirm that this set the `docker-default` policy to complain mode by running `apparmor_status`.  To view any complaints from apparmor, run `dmesg`.  Unfortunately an `aa-complain` equivalent is not currently supported in Docker (but pull requests welcome!)
+	You should see your terminal go into an interactive mode -- this is AppArmor watching the Firefox app.  Go ahead and open the Firefox app and browse some websites, maybe download some content, and generally exercise usual web-browsing behavior.  If you go back to the terminal running `aa-genprof`, you can press `s` to view events from the system log and decide whether or not to include these events in your AppArmor profile as an allow or deny statement.  When you're done, press `f` to finish -- you can view your profile in `/etc/apparmor.d/usr.bin.firefox` on an Ubuntu machine.
 
-3.  Automatically generating AppArmor profiles with `aa-genprof`
+	You can also use `aa-autodep` to automatically generate profiles, but this command will create an even more minimal profile.
 
-4.  Refining profiles with `aa-logprof`
+	To further refine an existing profile, `aa-logprof` operates in the same manner as `aa-genprof` but for amending a profile by scanning logs.
+
+
+3.  Debug AppArmor profiles with `aa-complain`: as described earlier, AppArmor has a "complain" mode of operation that does not actively block any violations to its security profile, but will instead log these events.  This is a fantastic tool for debugging, let's try viewing our Firefox profile:
+
+    `sudo aa-complain /etc/apparmor.d/usr.bin.firefox`
+
+    You can confirm that this set the Firefox policy to complain mode by running `apparmor_status`.  To view any complaints from apparmor, run `dmesg`.
