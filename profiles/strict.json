@@ -1,0 +1,30 @@
+{
+	"defaultAction": "SCMP_ACT_ERRNO",
+	"architectures": [
+		"SCMP_ARCH_X86_64",
+		"SCMP_ARCH_X86",
+		"SCMP_ARCH_X32"
+	],
+	"syscalls": [
+		{
+			"name": "read",
+			"action": "SCMP_ACT_ALLOW",
+			"args": []
+		},
+		{
+			"name": "write",
+			"action": "SCMP_ACT_ALLOW",
+			"args": []
+		},
+		{
+			"name": "_exit",
+			"action": "SCMP_ACT_ALLOW",
+			"args": []
+		},
+		{
+			"name": "sigreturn",
+			"action": "SCMP_ACT_ALLOW",
+			"args": []
+		}
+	]
+}
