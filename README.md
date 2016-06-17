@@ -38,13 +38,15 @@ sudo: unable to initialize policy plugin
 
 ## Capabilities
 
-Whenever a user executes a file that has a certain set of capabilities associated with it, the process it spawns inherits those capabilities. This works similarly to the setuid flag, but much more granular.
+Capability sets and security bits are much more complex in a standard linux system. When using docker there are certain limitations that make managing capabilities much simpler. TODO: shorten the summary, focus on the docker part, then give all the details in the advanced section
+
+Whenever a user executes a file that has a certain set of capabilities associated with it, the process it spawns gains those capabilities. This works similarly to the setuid flag, but much more granular.
 
 File capabilities can be one of:
 
 * Permitted - all threads that exec this file receive its capabilities
 * Inheritable - this set is ANDed with the thread's inheritable set
-* Effective bit - whether to make new capabilities effective after exec
+* Effective bit - whether to make new capabilities effective after exec; if not set, the process needs to give itself effective capabilities up to the permitted set
 
 Thread capability sets:
 
@@ -85,6 +87,15 @@ Docker doesn't support file capabilities in images right now. They are stripped 
 
 If you give a container capabilities but run as non root, all these capabilities are dropped on exec of the command, and can only be raised via filesystem capabilities or suid programs. This means that you can't add capabilities to non-root users, only take away capabilities from the root user. This feature may be added to Docker in future versions, but it will require kernels >=4.3 because it requires ambient capabilities.
 
+In practice you have 3 options right now:
+
+* run as root with a large set of capabilities and try to manage capabilities within your container manually - not recommended unless you know exactly what you are doing
+* run as root with limited capabilities to begin with; use --cap-add and --cap-drop in `docker run` to achieve this
+* run as an unprivileged user and no capabilities
+
+One more option *may* be added in the future:
+
+* run as a non-root user and a small set of specific capabilities
 
 ### Tools
 
@@ -186,7 +197,11 @@ unable to raise CAP_SETPCAP for BSET changes: Operation not permitted
 
 ### Tips
 
-You probably want to drop CAP_SETPCAP if you are not using it.
+Your docker images can't have files with capability bits set, so it's unlikely that programs in docker containers can use capabilities to escalate privileges. You might still want to make sure that none of the volumes you are mounting into docker containers contain files with capability bits set.
+
+TODO: show how to audit directories for capability bits.
+
+TODO: show how to remove capability bits
 
 ## Seccomp
 
