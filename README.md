@@ -1,6 +1,158 @@
 # dockercon-workshop
 #### Dockercon 2016 Security Workshop
 
+## Secure bits
+
+Secure bits can be used as another layer of protection to prevent privilege escalation from within a container.
+
+Setting secure bits requires CAP_SETPCAP, which docker allows by default.
+
+Secure bits are set through `prctl()` and affect how capabilities are passed on. They can be used to prevent setuid programs from gaining or dropping privileges.
+
+* SECBIT_NOROOT – don't grant capabilities to setuid programs or processes exec'd as root
+* SECBIT_NO_SETUID_FIXUP – don't clear capabilities when transitioning from or to uid 0
+* SECBIT_KEEP_CAPS – don't clear capabilities when switching from uid 0 to non-uid 0
+* SECBIT_NO_CAP_AMBIENT_RAISE - disallow raising ambient capabilities
+
+Also there are corresponding \_LOCKED variables that prevent the bits from being changed again and are inherited when execing. SECBIT_KEEP_CAPS is always cleared on `execve()`.
+
+These bits are set with `prctl(PR_SET_SECUREBITS, X);`
+
+
+https://lwn.net/Articles/280279/
+http://lxr.free-electrons.com/source/include/uapi/linux/securebits.h#L21
+
+### Secure bits example
+
+In this example we execute sudo without making it actually run as root.
+
+Example setting SECBIT_NOROOT
+```
+/ # apk add -U libcap bash sudo
+/ # capsh --secbits=0x03 --uid=65534 -- -c 'sudo ls'
+sudo: PERM_SUDOERS: setresuid(-1, 1, -1): Operation not permitted
+sudo: no valid sudoers sources found, quitting
+sudo: setresuid() [0, 0, 0] -> [65534, -1, -1]: Operation not permitted
+sudo: unable to initialize policy plugin
+```
+
+## Capabilities
+
+Whenever a user executes a file that has a certain set of capabilities associated with it, the process it spawns inherits those capabilities. This works similarly to the setuid flag, but much more granular.
+
+File capabilities can be one of:
+
+* Permitted - all threads that exec this file receive its capabilities
+* Inheritable - this set is ANDed with the thread's inheritable set
+* Effective bit - whether to make new capabilities effective after exec
+
+Thread capability sets:
+
+* Permitted - limiting superset of effective capabilities; can only be removed from by a thread
+* Inheritable - preserved across execve, but remain inheritable; must exec a binary with the same capabilities in its inheritable set to actually gain these capabilities; having CAP_SETPCAP allows adding permissions to this set up to the permitted set
+* Effective - current capabilities; subset of permitted, can be dropped or added
+* Ambient - new in kernel 4.3, subset of permitted and inheritable; inherited as permitted/effective as long as no setuid/capabilities programs are called
+* Bounding - the set of capabilities that a program or its children is ever allowed to receive; these can only be dropped and when dropped remove the corresponding capability from the permitted set; dropping capabilities requires CAP_SETPCAP
+
+> Note that the bounding set masks the file permitted capabilities, but
+> not the inherited capabilities.  If a thread maintains a capability
+> in its inherited set that is not in its bounding set, then it can
+> still gain that capability in its permitted set by executing a file
+> that has the capability in its inherited set.
+
+http://man7.org/linux/man-pages/man7/capabilities.7.html
+
+TODO: draw some pretty venn diagrams of these sets? I can also show on the diagram what actions a thread is allowed to do, how it interacts with file capabilities, how securebits affect this process, etc.
+
+File capabilities are stored in an extended attribute `security.capability`.
+
+
+### Docker capabilities
+
+Docker allows your to specify what capabilities you want your docker container's root process to have.
+
+Examples:
+
+```
+docker run --rm -it --cap-add $CAP alpine sh
+docker run --rm -it --cap-drop $CAP alpine sh
+docker run --rm -it --cap-drop ALL --cap-add $CAP alpine sh
+```
+
+Docker capabilities constants are not prefixed with `CAP_` but otherwise match the kernel's constants.
+
+TODO: verify
+File capabilities are not supported on AUFS because they require extended attributes.
+
+### Tools
+
+libcap
+* capsh
+
+libcap-ng
+
+* pscap
+* filecap
+* captest
+
+
+Printing out all capabilities
+
+In alpine
+```
+$ docker run --rm -it alpine sh -c 'apk add -U libcap; capsh --print'
+$ docker run --rm -it alpine sh -c 'apk add -U libcap-ng-utils; captest'
+```
+
+Very cool feature of libcap-ng's captest:
+```
+Attempting to regain root...SUCCESS - PRIVILEGE ESCALATION POSSIBLE
+```
+
+
+```
+TODO: setcap example
+setcap cap_net_raw=ep $file
+getcap $file
+TODO: getxattr example
+getfattr -n security.capability $file
+# file: $file
+security.capability=0sAQAAAgAgAAAAAAAAAAAAAAAAAAA=
+```
+
+In Ubuntu:
+```
+$ docker run --rm -it ubuntu capsh --print
+```
+
+### Demo
+
+```
+$ docker run --rm -it --cap-drop CHOWN alpine chown nobody /
+```
+
+```
+$ docker run --rm -it alpine chown nobody /
+chown: /: Operation not permitted
+```
+
+This doesn't actually drop the capability - TODO: why? it's not in the "bounding set" but it's in the "current set"
+```
+$ docker run --rm -it alpine sh -c 'apk add -U libcap bash; capsh --drop=cap_chown -- -c "chown nobody /"'
+```
+
+```
+$ docker run --rm -it --cap-drop SETPCAP alpine sh -c 'apk add -U libcap; capsh --drop=cap_chown'
+unable to raise CAP_SETPCAP for BSET changes: Operation not permitted
+```
+
+
+### Tips
+
+You probably want to drop CAP_SETPCAP if you are not using it.
+
+## Seccomp
+
 Docs: https://docs.docker.com/engine/security/seccomp/
 
 ### Checking if seccomp is enabled:
@@ -118,6 +270,10 @@ The rule applies if **all** args match. To achieve the effect of an or, add mult
 
 When using multiple filters they are always all executed, starting with the most recently added. The highest precedence action returned is taken.
 
+### Example
+
+One potentially dangerous 
+
 ### Tips
 
 Strace is your friend. Here's a hacky oneliner to get a very nice summary of what system calls a program makes:
@@ -182,7 +338,10 @@ research the interactions between ptrace and seccomp more - is the only issue wh
 
 read
 what is this? http://thread.gmane.org/gmane.linux.ports.parisc/26854
-docker hacks: https://github.com/docker/docker/issues/21984
+https://www.kernel.org/doc/ols/2008/ols2008v1-pages-163-172.pdf
+
+capabilities:
+http://www.insanitybit.com/2014/09/08/sandboxing-linux-capabilities/
 
 
 useful resources:
