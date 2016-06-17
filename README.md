@@ -10,7 +10,7 @@ Setting secure bits requires CAP_SETPCAP, which docker allows by default.
 Secure bits are set through `prctl()` and affect how capabilities are passed on. They can be used to prevent setuid programs from gaining or dropping privileges.
 
 * SECBIT_NOROOT – don't grant capabilities to setuid programs or processes exec'd as root
-* SECBIT_NO_SETUID_FIXUP – don't clear capabilities when transitioning from or to uid 0
+* SECBIT_NO_SETUID_FIXUP – don't clear capabilities when transitioning from or to uid 0 using the setuid binary
 * SECBIT_KEEP_CAPS – don't clear capabilities when switching from uid 0 to non-uid 0
 * SECBIT_NO_CAP_AMBIENT_RAISE - disallow raising ambient capabilities
 
@@ -81,13 +81,17 @@ docker run --rm -it --cap-drop ALL --cap-add $CAP alpine sh
 
 Docker capabilities constants are not prefixed with `CAP_` but otherwise match the kernel's constants.
 
-TODO: verify
-File capabilities are not supported on AUFS because they require extended attributes.
+Docker doesn't support file capabilities in images right now. They are stripped during builds. There is some interest in fixing that in the future, but older versions of AUFS didn't support extended attributes, so we can't assume that all filesystem drivers support them. This can make images less portable if we ever allow them.
+
+If you give a container capabilities but run as non root, all these capabilities are dropped on exec of the command, and can only be raised via filesystem capabilities or suid programs. This means that you can't add capabilities to non-root users, only take away capabilities from the root user. This feature may be added to Docker in future versions, but it will require kernels >=4.3 because it requires ambient capabilities.
+
 
 ### Tools
 
 libcap
 * capsh
+* setcap
+* getcap
 
 libcap-ng
 
@@ -101,6 +105,38 @@ Printing out all capabilities
 In alpine
 ```
 $ docker run --rm -it alpine sh -c 'apk add -U libcap; capsh --print'
+```
+
+The syntax is confusing. "Current" is multiple sets separated by a space. Multiple capabilities within the same set are separated by a `,`. The `+` suffix describes what the set is. `e` is effective `i` is inheritable `p` is permitted.
+
+capsh
+```
+usage: capsh [args ...]
+  --help         this message (or try 'man capsh')
+  --print        display capability relevant state
+  --decode=xxx   decode a hex string to a list of caps
+  --supports=xxx exit 1 if capability xxx unsupported
+  --drop=xxx     remove xxx,.. capabilities from bset
+  --caps=xxx     set caps as per cap_from_text()
+  --inh=xxx      set xxx,.. inheritiable set
+  --secbits=<n>  write a new value for securebits
+  --keep=<n>     set keep-capabability bit to <n>
+  --uid=<n>      set uid to <n> (hint: id <username>)
+  --gid=<n>      set gid to <n> (hint: id <username>)
+  --groups=g,... set the supplemental groups
+  --user=<name>  set uid,gid and groups to that of user
+  --chroot=path  chroot(2) to this path
+  --killit=<n>   send signal(n) to child
+  --forkfor=<n>  fork and make child sleep for <n> sec
+  ==             re-exec(capsh) with args as for --
+  --             remaing arguments are for /bin/bash
+                 (without -- [capsh] will simply exit(0))
+```
+
+Warning:
+`--drop` sounds like what you want to do, but it affects only the bounding set. This can be very confusing because it doesn't actually take away the capability from the effective or inheritable set. You almost always want to use `--caps`, which uses the same syntax as the output of `--print`.
+
+```
 $ docker run --rm -it alpine sh -c 'apk add -U libcap-ng-utils; captest'
 ```
 
