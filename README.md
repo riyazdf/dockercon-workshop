@@ -144,6 +144,7 @@ Very cool feature of libcap-ng's captest:
 ```
 Attempting to regain root...SUCCESS - PRIVILEGE ESCALATION POSSIBLE
 ```
+Not the most useful thing because "root" doesn't really mean the same thing within docker.
 
 
 ```
@@ -172,7 +173,7 @@ $ docker run --rm -it alpine chown nobody /
 chown: /: Operation not permitted
 ```
 
-This doesn't actually drop the capability - TODO: why? it's not in the "bounding set" but it's in the "current set"
+This doesn't actually drop the capability - dropping from the bounding set doesn't remove it from the inheritable/effective sets
 ```
 $ docker run --rm -it alpine sh -c 'apk add -U libcap bash; capsh --drop=cap_chown -- -c "chown nobody /"'
 ```
