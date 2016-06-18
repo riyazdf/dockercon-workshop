@@ -216,7 +216,12 @@ http://man7.org/linux/man-pages/man7/capabilities.7.html
 
 ## Seccomp
 
-Docs: https://docs.docker.com/engine/security/seccomp/
+Seccomp is a firewall for your system calls.
+It uses Berkeley Packet Filter (BPF) programs to filter system calls and control how they are handled.
+BPF programs are a simple interpreted assemby-like language that is limited in where it can read data from and write data to.
+BPF programs can't have backward jumps and are limited in size.
+This means that there's an upper limit to the run time of filters and they are guaranteed to termminate.
+These filters can be used to significantly limit the attack surface of the linux kernel, especially for simple applications.
 
 ### Checking if seccomp is enabled:
 
@@ -224,7 +229,7 @@ Docs: https://docs.docker.com/engine/security/seccomp/
 zgrep SECCOMP /proc/config.gz
 ```
 
-or
+or in any version of docker:
 
 ```
 docker run --rm alpine grep Seccomp /proc/self/status
@@ -236,27 +241,30 @@ or in docker 1.12:
 docker info
 ```
 
-### Seccomp modes
+### Seccomp and Docker
 
-SECCOMP_MODE_STRICT: allow only `read`, `write`, `_exit` and `sigreturn`
-SECCOMP_MODE_FILTER: BPF filters for any system call
+The original seccomp was what's now called "strict mode" where the only system calls allowed are `read`, `write`, `_exit` and `sigreturn`. This is not useful for docker containers because all docker programs need many other system calls just to initialize, load dynamic libraries, etc. The mode used by docker is called "filter mode". It uses BPF filters to control exactly which system calls to allow.
 
-Docker supports only filter mode, which is a superset of strict mode.
+Docker has a JSON based DSL which allows defining seccomp profiles that compile down to seccomp filters. Profiles are passed to the `--run` command with the following flag:
 
-### Using seccomp with docker
+```
+--security-opt seccomp=profile.json
+```
 
-The security profile is sent from the Docker client to the Docker daemon,
-so the path to the profile can be local to the client and relative to the current directory.
+The JSON file is sent from the Docker client to the Docker daemon and the docker daemon
+compiles it into a BPF program using a thin go wrapper around libseccomp: github.com/seccomp/libseccomp-golang.
+
+The best way to test the effect of your seccomp profiles is to add all capabilities and disable apparmor.
+The following example uses one of the profiles included in this guide to show how to prevent a program from making any system calls at all.
+This is a reliable way to make sure your seccomp profile is enforced.
 
 ```
 docker run --rm -it --cap-add ALL --security-opt apparmor=unconfined --security-opt seccomp=./profiles/deny.json alpine sh
 ```
 
-### Writing a policy
+### Writing a seccomp profile
 
-Seccomp filters support arbitrary terminating programs defined by BPF code with a limit on the size of the programs.
-
-Docker uses json files to define seccomp filters. The layout of the filter files looks like this:
+The layout of a docker seccomp profile looks like this:
 
 ```
 {
@@ -282,18 +290,23 @@ Docker uses json files to define seccomp filters. The layout of the filter files
 }
 ```
 
-The most authoritative source for how to write a docker seccomp policy is the structs used to deserialize the json. [3] [4]
+The most authoritative source for how to write a docker seccomp profile is the structs used to deserialize the json.
 
-Possible actions in order of precedence (higher actions overrule lower actions):
+* https://github.com/docker/engine-api/blob/c15549e10366236b069e50ef26562fb24f5911d4/types/seccomp.go
+* https://github.com/opencontainers/runtime-spec/blob/master/specs-go/config.go#L357
+
+The possible actions in order of precedence (higher actions overrule lower actions):
 
 |----------------|--------------------------------------------------------------------------|
-| SCMP_ACT_KILL  | Kill with a exit status of `0x80 + 31 (SIGSYS) = 159` |
-| SCMP_ACT_TRAP  | Send a `SIGSYS` signal without executing the system call |
-| SCMP_ACT_ERRNO | Set `errno` to `SECCOMP_RET_DATA` without executing the system call |
-| SCMP_ACT_TRACE | Invoke a ptracer to make a decision or set `errno` to `-ENOSYS` |
-| SCMP_ACT_ALLOW | Allow |
+| SCMP_ACT_KILL  | Kill with a exit status of `0x80 + 31 (SIGSYS) = 159`                    |
+| SCMP_ACT_TRAP  | Send a `SIGSYS` signal without executing the system call                 |
+| SCMP_ACT_ERRNO | Set `errno` without executing the system call                            |
+| SCMP_ACT_TRACE | Invoke a ptracer to make a decision or set `errno` to `-ENOSYS`          |
+| SCMP_ACT_ALLOW | Allow                                                                    |
 
-More complex example:
+The most important ones for docker users are `SCMP_ACT_ERRNO` and `SCMP_ACT_ALLOW`.
+
+Profiles can contain more granular filters based on the value of the arguments to the system call.
 
 ```
 {
@@ -315,49 +328,27 @@ More complex example:
 }
 ```
 
-`index` is the index of the system call argument
-`op` is the operation to perform on the argument. It can be one of:
-    * SCMP_CMP_NE
-    * SCMP_CMP_LT
-    * SCMP_CMP_LE
-    * SCMP_CMP_EQ
-    * SCMP_CMP_GE
-    * SCMP_CMP_GT
-    * SCMP_CMP_MASKED_EQ
-`value` is a parameter for the operation
-`valueTwo` is used only for SCMP_CMP_MASKED_EQ to represent a second parameter. The first is the mask, the second is the value to compare to.
+* `index` is the index of the system call argument
+* `op` is the operation to perform on the argument. It can be one of:
+    * SCMP_CMP_NE - not equal
+    * SCMP_CMP_LT - less than
+    * SCMP_CMP_LE - less than or equal to
+    * SCMP_CMP_EQ - equal to
+    * SCMP_CMP_GE - greater than
+    * SCMP_CMP_GT - greater or equal to
+    * SCMP_CMP_MASKED_EQ - masked equal: true iff `(value & arg == valueTwo)`
+* `value` is a parameter for the operation
+* `valueTwo` is used only for SCMP_CMP_MASKED_EQ
 
-The rule applies if **all** args match. To achieve the effect of an or, add multiple rules.
+The rule matches if **all** args match. To achieve the effect of an or, add multiple rules.
 
-### Using multiple filters
-
-When using multiple filters they are always all executed, starting with the most recently added. The highest precedence action returned is taken.
-
-### Example
-
-One potentially dangerous 
-
-### Tips
-
-Strace is your friend. Here's a hacky oneliner to get a very nice summary of what system calls a program makes:
+Strace can be used to get a list of all system calls made by a program.
+It's a very good starting point for writing seccomp policies.
+Here's an example of how we can list all system calls made by `ls`:
 
 ```
-strace -c -f -S name $CMD 2>&1 1>/dev/null | tail -n +3 | head -n -2 | awk '{print $(NF)}'
+strace -c -f -S name ls 2>&1 1>/dev/null | tail -n +3 | head -n -2 | awk '{print $(NF)}'
 ```
-
-This works as long as the program doesn't print to stderr. Dealing with programs that print to stderr is left as an exercise for the reader.
-
-You can enable JITing of BPF filters (if it isn't already enabled) this way:
-
-```
-echo 1 > /proc/sys/net/core/bpf_jit_enable
-```
-
-Exit status of process killed by signal is 128 + signum and SIGSYS is 31, so you can expect your process to die with exit status 159 when it violates a seccomp policy.
-
-There is no easy to use seccomp warn mode, but it's theoretically possible to implement. [2]
-
-If you have setuid programs in your container, a malicious program could create a seccomp policy that denies specific system calls and causes unexpected behaviour in your setuid program. This is why you might want to use seccomp to disable the seccomp system call within your containers.
 
 ### Demo
 
@@ -365,7 +356,7 @@ Inspiration for this demo:
 Seccomp sandboxes and memcached example, part 2 by Stanisław Pitucha
 http://blog.viraptor.info/post/seccomp-sandboxes-and-memcached-example-part-2
 
-Preparation
+(Optional) Preparation
 
 ```
 $ docker run --name mem alpine sh -c 'apk add -U strace memcached'
@@ -375,13 +366,13 @@ $ docker commit mem vikstrous/seccomp-demo
 Tracing
 
 ```
-$ docker run -u nobody vikstrous/seccomp-demo strace memcached
+$ docker run --rm -it --cap-add SYS_PTRACE --security-opt seccomp=unconfined vikstrous/seccomp-demo strace memcached -u root
 ```
 
 Taking a sample
 
 ```
-$ docker run -u nobody vikstrous/seccomp-demo strace -c -f -S name memcached 2> table.txt
+$ docker run --rm -it --cap-add SYS_PTRACE --security-opt seccomp=unconfined vikstrous/seccomp-demo strace -c -f -S name memcached -u root > table.txt
 ```
 
 Cleaning up
@@ -396,6 +387,7 @@ Result:
 arch_prctl
 bind
 brk
+clock_gettime
 clone
 close
 connect
@@ -419,16 +411,25 @@ open
 pipe
 prlimit64
 read
+readv
 rt_sigaction
 rt_sigprocmask
 set_tid_address
+setgid
 setsockopt
+setuid
 socket
 socketpair
 write
 ```
 
-Turn that list into a policy...
+Turn that list into a profile. This sed command might save you some time:
+
+```
+sed 's/.*/\\t\\t{\\n\\t\\t\\t"name": "\\0",\\n\\t\\t\\t"action":"SCMP_ACT_ALLOW",\\n\\t\\t\\t"args": []\\n\\t\\t},/'
+```
+
+The profile should look like this (you can find it in `seccomp-profiles/memcached.json`):
 
 ```
 {
@@ -449,16 +450,19 @@ Turn that list into a policy...
 }
 ```
 
-Test out our policy
+Test out our profile
+
+TODO: this doesn't work
 
 ```
-$ docker run -u nobody -p 11211:11211 --security-opt seccomp=memcached.json vikstrous/seccomp-demo memcached
+$ docker run --rm -it --security-opt seccomp=memcached.json vikstrous/seccomp-demo memcached -u root
 $ telnet localhost 11211
 stats
 quit
 ```
 
 Let's restrict the ports it can listen on
+
 ```
 $ docker run -u nobody vikstrous/seccomp-demo strace memcached 2>&1 | grep bind
 bind(26, {sa_family=AF_INET, sin_port=htons(11211), sin_addr=inet_addr("0.0.0.0")}, 16) = 0
@@ -468,11 +472,9 @@ bind(26, {sa_family=AF_INET, sin_port=htons(1234), sin_addr=inet_addr("0.0.0.0")
 ...
 ```
 
-
-
 ### Gotchas
 
-There are some things that you can easily miss when writing seccomp filters.
+There are some things that you can easily miss when using seccomp with docker.
 
 #### Truncation
 
@@ -489,51 +491,55 @@ When writing a seccomp filter sometimes arguments are truncated by the operating
 > half of the argument register is ignored by the system call, but
 > visible in the seccomp data.
 
-[[1]](https://www.kernel.org/doc/Documentation/prctl/seccomp_filter.txt)
+https://www.kernel.org/doc/Documentation/prctl/seccomp_filter.txt
 
 #### Seccomp escapes
 
-Architecture dependent syscall numbers
+* Syscall numbers are architecture dependant, so raw BPF filters are not very portable.
+Luckily docker abstract this issue away, so you don't need to worry about it if using docker seccomp profiles.
 
-ptrace is disabled by default and you should not enable it because it allows bypassing seccomp
+* ptrace is disabled by default and you should not enable it because it allows bypassing seccomp.
+You can use this script to test for seccomp escapes through ptrace:
 https://gist.github.com/thejh/8346f47e359adecd1d53
-
-seccomp
-prctl
-ptrace
 
 #### Differences between docker versions
 
-Seccomp is supported as of Docker 1.10.
+* Seccomp is supported as of Docker 1.10.
 
-In Docker 1.10 using `--privileged` does not disable seccomp.
-TODO: verify^
+* Using `--privileged` disables seccomp.
+In general you should try to avoid ever using `--privileged` because it does too many things.
+You can achieve the same goal with `--cap-add ALL --security-opt apparmor=unconfined --security-opt seccomp=unconfined`.
+If you need access to devices use `--device`.
 
-In Docker 1.11+ using `--privileged` disables seccomp for docker run, but not for docker exec. https://github.com/docker/docker/issues/21984. Try to avoid ever using `--privileged`. You can achieve the same goal with `--cap-add ALL --security-opt apparmor=unconfined --security-opt seccomp=unconfined`.
+* Docker exec `--privileged` does not bypass seccomp. This may change in future versions https://github.com/docker/docker/issues/21984
 
-In docker 1.12+ adding a capability disables the relevant seccomp filter in the default seccomp policy. It can't disable apparmor, though.
+* In docker 1.12+ adding a capability disables the relevant seccomp filter in the default seccomp profile. It can't disable apparmor, though.
 
-### TODO
+### Using multiple filters
 
-research the interactions between ptrace and seccomp more - is the only issue when using SECCOMP_RET_TRACE and not restricting ptrace?
+The only way to use multiple seccomp filters right now is to load addition filters within your program at run time.
+The kernel supports layering filters.
+When using multiple layered filters they are always all executed, starting with the most recently added.
+The highest precedence action returned is taken.
+See the man page for all the details: http://man7.org/linux/man-pages/man2/seccomp.2.html
 
-read
-what is this? http://thread.gmane.org/gmane.linux.ports.parisc/26854
-https://www.kernel.org/doc/ols/2008/ols2008v1-pages-163-172.pdf
+### Misc
 
-capabilities:
-http://www.insanitybit.com/2014/09/08/sandboxing-linux-capabilities/
+You can enable JITing of BPF filters (if it isn't already enabled) this way:
 
+```
+echo 1 > /proc/sys/net/core/bpf_jit_enable
+```
 
-useful resources:
-https://lwn.net/Articles/656307/ (summary of: http://man7.org/conf/lpc2015/limiting_kernel_attack_surface_with_seccomp-LPC_2015-Kerrisk.pdf )
+There is no easy to use seccomp in a mode that reports errors without crashing the program, but it's possible to implement in one of several ways.
+One way to do this is to use SCMP_ACT_TRAP and make your process handle SIGSYS and report the error in a useful way.
+There's some information about how Firefox handles seccomp violations here: https://wiki.mozilla.org/Security/Sandbox/Seccomp
 
-chrome's DSL for generating seccomp BPF programs (also used in firefox [2]):
+### Further reading:
+
+Very comprehensive presentation about seccomp that goes into more detail than this document.
+https://lwn.net/Articles/656307/
+http://man7.org/conf/lpc2015/limiting_kernel_attack_surface_with_seccomp-LPC_2015-Kerrisk.pdf
+
+Chrome's DSL for generating seccomp BPF programs:
 https://cs.chromium.org/chromium/src/sandbox/linux/bpf_dsl/bpf_dsl.h?sq=package:chromium&dr=CSs
-
-**Sources**
-
-*[1] https://www.kernel.org/doc/Documentation/prctl/seccomp_filter.txt*
-*[2] https://wiki.mozilla.org/Security/Sandbox/Seccomp*
-*[3] https://github.com/docker/engine-api/blob/c15549e10366236b069e50ef26562fb24f5911d4/types/seccomp.go*
-*[4] https://github.com/opencontainers/runtime-spec/blob/master/specs-go/config.go#L357*

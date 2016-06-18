@@ -1,0 +1,10 @@
+readv
+rt_sigaction
+rt_sigprocmask
+set_tid_address
+setgid
+setsockopt
+setuid
+socket
+socketpair
+write
