@@ -1,77 +1,23 @@
 # dockercon-workshop
 #### Dockercon 2016 Security Workshop
 
-## Secure bits
-
-Secure bits can be used as another layer of protection to prevent privilege escalation from within a container.
-
-Setting secure bits requires CAP_SETPCAP, which docker allows by default.
-
-Secure bits are set through `prctl()` and affect how capabilities are passed on. They can be used to prevent setuid programs from gaining or dropping privileges.
-
-* SECBIT_NOROOT – don't grant capabilities to setuid programs or processes exec'd as root
-* SECBIT_NO_SETUID_FIXUP – don't clear capabilities when transitioning from or to uid 0 using the setuid binary
-* SECBIT_KEEP_CAPS – don't clear capabilities when switching from uid 0 to non-uid 0
-* SECBIT_NO_CAP_AMBIENT_RAISE - disallow raising ambient capabilities
-
-Also there are corresponding \_LOCKED variables that prevent the bits from being changed again and are inherited when execing. SECBIT_KEEP_CAPS is always cleared on `execve()`.
-
-These bits are set with `prctl(PR_SET_SECUREBITS, X);`
-
-
-https://lwn.net/Articles/280279/
-http://lxr.free-electrons.com/source/include/uapi/linux/securebits.h#L21
-
-### Secure bits example
-
-In this example we execute sudo without making it actually run as root.
-
-Example setting SECBIT_NOROOT
-```
-/ # apk add -U libcap bash sudo
-/ # capsh --secbits=0x03 --uid=65534 -- -c 'sudo ls'
-sudo: PERM_SUDOERS: setresuid(-1, 1, -1): Operation not permitted
-sudo: no valid sudoers sources found, quitting
-sudo: setresuid() [0, 0, 0] -> [65534, -1, -1]: Operation not permitted
-sudo: unable to initialize policy plugin
-```
-
 ## Capabilities
 
-Capability sets and security bits are much more complex in a standard linux system. When using docker there are certain limitations that make managing capabilities much simpler. TODO: shorten the summary, focus on the docker part, then give all the details in the advanced section
-
-Whenever a user executes a file that has a certain set of capabilities associated with it, the process it spawns gains those capabilities. This works similarly to the setuid flag, but much more granular.
-
-File capabilities can be one of:
-
-* Permitted - all threads that exec this file receive its capabilities
-* Inheritable - this set is ANDed with the thread's inheritable set
-* Effective bit - whether to make new capabilities effective after exec; if not set, the process needs to give itself effective capabilities up to the permitted set
-
-Thread capability sets:
-
-* Permitted - limiting superset of effective capabilities; can only be removed from by a thread
-* Inheritable - preserved across execve, but remain inheritable; must exec a binary with the same capabilities in its inheritable set to actually gain these capabilities; having CAP_SETPCAP allows adding permissions to this set up to the permitted set
-* Effective - current capabilities; subset of permitted, can be dropped or added
-* Ambient - new in kernel 4.3, subset of permitted and inheritable; inherited as permitted/effective as long as no setuid/capabilities programs are called
-* Bounding - the set of capabilities that a program or its children is ever allowed to receive; these can only be dropped and when dropped remove the corresponding capability from the permitted set; dropping capabilities requires CAP_SETPCAP
-
-> Note that the bounding set masks the file permitted capabilities, but
-> not the inherited capabilities.  If a thread maintains a capability
-> in its inherited set that is not in its bounding set, then it can
-> still gain that capability in its permitted set by executing a file
-> that has the capability in its inherited set.
-
-http://man7.org/linux/man-pages/man7/capabilities.7.html
-
-TODO: draw some pretty venn diagrams of these sets? I can also show on the diagram what actions a thread is allowed to do, how it interacts with file capabilities, how securebits affect this process, etc.
-
-File capabilities are stored in an extended attribute `security.capability`.
-
+Capabilities split up the privileges of the root user into multiple sets, allowing the root user to not be all-powerful and/or a regular user to gain some of the capabilities normally associated with root without having to actually execute with full root access.
+Capabilities apply to both threads and files.
+File capabilities allow users to execute programs with higher privileges than themselves, similarly to how the setuid bit works.
+Thread capabilities keep track of the current state of capabilities in running programs.
+In a Linux system there are multiple capability sets per thread and they interact in complex ways with the capability bits on files.
+When using docker there are certain limitations that make managing capabilities much simpler.
+Docker images don't have files with capabilities because extended attributes are stripped during build.
+It's still possible to put files with capabilities into docker containers using volumes, bind mounts or by adding files during run time, but this is not recommended.
+In an environment without file based capabilities, it's not possible for applications to escalate their privileges beyond the "bounding set".
+Docker sets the bounding set before starting a container.
+You can use docker commands to add or remove capabilities to or from the bounding set.
 
 ### Docker capabilities
 
-Docker allows your to specify what capabilities you want your docker container's root process to have.
+Docker allows your to specify what capabilities you want your docker container's root process to have when running a docker image.
 
 Examples:
 
@@ -83,44 +29,62 @@ docker run --rm -it --cap-drop ALL --cap-add $CAP alpine sh
 
 Docker capabilities constants are not prefixed with `CAP_` but otherwise match the kernel's constants.
 
-Docker doesn't support file capabilities in images right now. They are stripped during builds. There is some interest in fixing that in the future, but older versions of AUFS didn't support extended attributes, so we can't assume that all filesystem drivers support them. This can make images less portable if we ever allow them.
+The man page for capabilities has the full list: http://man7.org/linux/man-pages/man7/capabilities.7.html
 
-If you give a container capabilities but run as non root, all these capabilities are dropped on exec of the command, and can only be raised via filesystem capabilities or suid programs. This means that you can't add capabilities to non-root users, only take away capabilities from the root user. This feature may be added to Docker in future versions, but it will require kernels >=4.3 because it requires ambient capabilities.
+You have 3 options for using capabilities with docker right now as of docker 1.12:
 
-In practice you have 3 options right now:
+1. run as root with a large set of capabilities and try to manage capabilities within your container manually
+2. run as root with limited capabilities and never change them within a container
+3. run as an unprivileged user and no capabilities
 
-* run as root with a large set of capabilities and try to manage capabilities within your container manually - not recommended unless you know exactly what you are doing
-* run as root with limited capabilities to begin with; use --cap-add and --cap-drop in `docker run` to achieve this
-* run as an unprivileged user and no capabilities
+The first option should be avoided whenever possible. The best case scenario is number 3. The second option is the best you can do right now if you do need some capabilities.
 
-One more option *may* be added in the future:
-
-* run as a non-root user and a small set of specific capabilities
+Another option may be added in future versions of docker to run a non-root user with some capabilities. The correct way of doing this requires ambient capabilities and was added in kernel version 4.3. Whether or not it's possible for docker to approximate this behaviour in older kernels requires more research.
 
 ### Tools
 
+There are two main sets of tools for managing capabilities: libcap and libcap-ng.
+Libcap focuses more on manipulating capabilities while libcap-ng has some really useful tools for auditing.
+Here are the most useful commands from them.
+
 libcap
-* capsh
-* setcap
-* getcap
+
+* capsh - lets you modify capabilities within its own process in arbitrary ways and then execute a shell
+* setcap - set capability bits on a file
+  * `setcap cap_sys_admin+pie ls`
+  * `setcap -r ls`
+* getcap - get the capability bits from a file
+  * `getcap -r .`
 
 libcap-ng
 
-* pscap
-* filecap
-* captest
+* pscap - list the capabilities of running processes
+* filecap - list the capabilities of files
+* captest - check what capabilities are available to the captest process
 
+#### More libcap/libcap-ng usage examples
 
-Printing out all capabilities
+**Printing out all capabilities**
 
-In alpine
+In alpine you need to install the libcap package to use capsh:
 ```
 $ docker run --rm -it alpine sh -c 'apk add -U libcap; capsh --print'
+Current: = cap_chown,cap_dac_override,cap_fowner,cap_fsetid,cap_kill,cap_setgid,cap_setuid,cap_setpcap,cap_net_bind_service,cap_net_raw,cap_sys_chroot,cap_mknod,cap_audit_write,cap_setfcap+eip
+Bounding set =cap_chown,cap_dac_override,cap_fowner,cap_fsetid,cap_kill,cap_setgid,cap_setuid,cap_setpcap,cap_net_bind_service,cap_net_raw,cap_sys_chroot,cap_mknod,cap_audit_write,cap_setfcap
+Securebits: 00/0x0/1'b0
+ secure-noroot: no (unlocked)
+ secure-no-suid-fixup: no (unlocked)
+ secure-keep-caps: no (unlocked)
+uid=0(root)
+gid=0(root)
+groups=0(root),1(bin),2(daemon),3(sys),4(adm),6(disk),10(wheel),11(floppy),20(dialout),26(tape),27(video)
 ```
 
-The syntax is confusing. "Current" is multiple sets separated by a space. Multiple capabilities within the same set are separated by a `,`. The `+` suffix describes what the set is. `e` is effective `i` is inheritable `p` is permitted.
+The syntax for the "Current" sets is confusing. "Current" is multiple sets separated by a space. Multiple capabilities within the same set are separated by a `,`. The letters after the `+` suffix describe what the set is. `e` is effective `i` is inheritable `p` is permitted. See the capabilities manpage to understand what these sets mean.
 
-capsh
+**Experimenting with capabilities**
+
+capsh usage:
 ```
 usage: capsh [args ...]
   --help         this message (or try 'man capsh')
@@ -144,64 +108,111 @@ usage: capsh [args ...]
                  (without -- [capsh] will simply exit(0))
 ```
 
-Warning:
-`--drop` sounds like what you want to do, but it affects only the bounding set. This can be very confusing because it doesn't actually take away the capability from the effective or inheritable set. You almost always want to use `--caps`, which uses the same syntax as the output of `--print`.
+> Warning:
+> `--drop` sounds like what you want to do, but it affects only the bounding set. This can be very confusing because it doesn't actually take away the capability from the effective or inheritable set. You almost always want to use `--caps`.
+
+**Modifying capabilities**
+
+You can use libcap:
 
 ```
-$ docker run --rm -it alpine sh -c 'apk add -U libcap-ng-utils; captest'
-```
-
-Very cool feature of libcap-ng's captest:
-```
-Attempting to regain root...SUCCESS - PRIVILEGE ESCALATION POSSIBLE
-```
-Not the most useful thing because "root" doesn't really mean the same thing within docker.
-
-
-```
-TODO: setcap example
 setcap cap_net_raw=ep $file
+```
+
+Or libcap-ng:
+
+```
+filecap /absolute/path net_raw
+```
+
+**Auditing**
+
+There are multiple ways to read out the capabilites from a file.
+
+Using libcap:
+
+```
 getcap $file
-TODO: getxattr example
+```
+
+Using libcap-ng:
+
+```
+filecap /absolue/path/to/file
+```
+
+Using extended attributes (attr package):
+
+```
 getfattr -n security.capability $file
 # file: $file
 security.capability=0sAQAAAgAgAAAAAAAAAAAAAAAAAAA=
 ```
 
-In Ubuntu:
-```
-$ docker run --rm -it ubuntu capsh --print
-```
-
 ### Demo
 
-```
-$ docker run --rm -it --cap-drop CHOWN alpine chown nobody /
-```
+This succeeds because by default root has the chown capability.
 
 ```
 $ docker run --rm -it alpine chown nobody /
+```
+
+This shows that the chown command works when it has only the chown capability.
+
+```
+docker run --rm -it --cap-drop ALL --cap-add CHOWN alpine chown nobody /
+```
+
+This fails because we removed the chown capability from root.
+
+```
+$ docker run --rm -it --cap-drop CHOWN alpine chown nobody /
 chown: /: Operation not permitted
 ```
 
-This doesn't actually drop the capability - dropping from the bounding set doesn't remove it from the inheritable/effective sets
-```
-$ docker run --rm -it alpine sh -c 'apk add -U libcap bash; capsh --drop=cap_chown -- -c "chown nobody /"'
-```
+This shows that docker doesn't currently support adding capabilities to non-root users.
 
 ```
-$ docker run --rm -it --cap-drop SETPCAP alpine sh -c 'apk add -U libcap; capsh --drop=cap_chown'
-unable to raise CAP_SETPCAP for BSET changes: Operation not permitted
+$ docker run --rm -it --cap-add chown -u nobody alpine chown nobody /
+chown: /: Operation not permitted
 ```
-
 
 ### Tips
 
-Your docker images can't have files with capability bits set, so it's unlikely that programs in docker containers can use capabilities to escalate privileges. You might still want to make sure that none of the volumes you are mounting into docker containers contain files with capability bits set.
+Your docker images can't have files with capability bits set, so it's unlikely that programs
+in docker containers can use capabilities to escalate privileges. You should make sure 
+that none of the volumes you are mounting into docker containers contain files with capability bits set.
 
-TODO: show how to audit directories for capability bits.
+You can audit directories for capability bits withe the following commands:
+```
+# with libcap
+getcap -r /
+# with libcap-ng
+filecap -a
+```
 
-TODO: show how to remove capability bits
+To remove capability bits you can use.
+```
+# with libcap
+setcap -r $file
+# with libcap-ng
+filecap /path/to/file none
+```
+
+### Further reading:
+
+This explains capabilities in a lot of detail. If you plan to run privileged docker containers and manage capabilities manually inside the containers, this will help you understand how capability sets interact with each other.
+https://www.kernel.org/doc/ols/2008/ols2008v1-pages-163-172.pdf
+
+This is the man page for capabilities. Most of the complex interactions between capability sets don't affect docker containers as long as there are no files with capability bits set.
+http://man7.org/linux/man-pages/man7/capabilities.7.html
+
+
+
+
+
+
+
 
 ## Seccomp
 
@@ -238,7 +249,7 @@ The security profile is sent from the Docker client to the Docker daemon,
 so the path to the profile can be local to the client and relative to the current directory.
 
 ```
-docker run --rm -it --cap-add ALL --security-opt apparmor=unconfined --security-opt seccomp=./profiles/empty.json alpine sh
+docker run --rm -it --cap-add ALL --security-opt apparmor=unconfined --security-opt seccomp=./profiles/deny.json alpine sh
 ```
 
 ### Writing a policy
@@ -275,7 +286,7 @@ The most authoritative source for how to write a docker seccomp policy is the st
 
 Possible actions in order of precedence (higher actions overrule lower actions):
 
-|-------------------|--------------------------------------------------------------------------|
+|----------------|--------------------------------------------------------------------------|
 | SCMP_ACT_KILL  | Kill with a exit status of `0x80 + 31 (SIGSYS) = 159` |
 | SCMP_ACT_TRAP  | Send a `SIGSYS` signal without executing the system call |
 | SCMP_ACT_ERRNO | Set `errno` to `SECCOMP_RET_DATA` without executing the system call |
@@ -294,9 +305,9 @@ More complex example:
             "args": [
                 {
                     "index": 0,
-                    "op": "SCMP_CMP_MASKED_EQ"
+                    "op": "SCMP_CMP_MASKED_EQ",
                     "value": 2080505856,
-                    "valueTwo": 0,
+                    "valueTwo": 0
                 }
             ]
         }
@@ -331,7 +342,7 @@ One potentially dangerous
 Strace is your friend. Here's a hacky oneliner to get a very nice summary of what system calls a program makes:
 
 ```
-strace -c -f -S name $CMD 2>&1 1>/dev/null | tail -n +4 | head -n -2 | awk '{print $(NF)}'
+strace -c -f -S name $CMD 2>&1 1>/dev/null | tail -n +3 | head -n -2 | awk '{print $(NF)}'
 ```
 
 This works as long as the program doesn't print to stderr. Dealing with programs that print to stderr is left as an exercise for the reader.
@@ -345,6 +356,119 @@ echo 1 > /proc/sys/net/core/bpf_jit_enable
 Exit status of process killed by signal is 128 + signum and SIGSYS is 31, so you can expect your process to die with exit status 159 when it violates a seccomp policy.
 
 There is no easy to use seccomp warn mode, but it's theoretically possible to implement. [2]
+
+If you have setuid programs in your container, a malicious program could create a seccomp policy that denies specific system calls and causes unexpected behaviour in your setuid program. This is why you might want to use seccomp to disable the seccomp system call within your containers.
+
+### Demo
+
+Inspiration for this demo:
+Seccomp sandboxes and memcached example, part 2 by Stanisław Pitucha
+http://blog.viraptor.info/post/seccomp-sandboxes-and-memcached-example-part-2
+
+Preparation
+
+```
+$ docker run --name mem alpine sh -c 'apk add -U strace memcached'
+$ docker commit mem vikstrous/seccomp-demo
+```
+
+Tracing
+
+```
+$ docker run -u nobody vikstrous/seccomp-demo strace memcached
+```
+
+Taking a sample
+
+```
+$ docker run -u nobody vikstrous/seccomp-demo strace -c -f -S name memcached 2> table.txt
+```
+
+Cleaning up
+
+```
+$ cat table.txt | grep -v strace | tail -n +3 | head -n -2 | awk '{print $(NF)}'
+```
+
+Result:
+
+```
+arch_prctl
+bind
+brk
+clone
+close
+connect
+dup
+epoll_create1
+epoll_ctl
+epoll_pwait
+execve
+fcntl
+fstat
+futex
+geteuid
+getsockname
+getsockopt
+getuid
+listen
+mmap
+mprotect
+nanosleep
+open
+pipe
+prlimit64
+read
+rt_sigaction
+rt_sigprocmask
+set_tid_address
+setsockopt
+socket
+socketpair
+write
+```
+
+Turn that list into a policy...
+
+```
+{
+	"defaultAction": "SCMP_ACT_ERRNO",
+	"architectures": [
+		"SCMP_ARCH_X86_64",
+		"SCMP_ARCH_X86",
+		"SCMP_ARCH_X32"
+	],
+	"syscalls": [
+		{
+			"name": "read",
+			"action": "SCMP_ACT_ALLOW",
+			"args": []
+		},
+        ...
+    }
+}
+```
+
+Test out our policy
+
+```
+$ docker run -u nobody -p 11211:11211 --security-opt seccomp=memcached.json vikstrous/seccomp-demo memcached
+$ telnet localhost 11211
+stats
+quit
+```
+
+Let's restrict the ports it can listen on
+```
+$ docker run -u nobody vikstrous/seccomp-demo strace memcached 2>&1 | grep bind
+bind(26, {sa_family=AF_INET, sin_port=htons(11211), sin_addr=inet_addr("0.0.0.0")}, 16) = 0
+...
+$ docker run -u nobody vikstrous/seccomp-demo strace memcached -p 1234 2>&1 | grep bind
+bind(26, {sa_family=AF_INET, sin_port=htons(1234), sin_addr=inet_addr("0.0.0.0")}, 16) = 0
+...
+```
+
+
 
 ### Gotchas
 
@@ -368,6 +492,11 @@ When writing a seccomp filter sometimes arguments are truncated by the operating
 [[1]](https://www.kernel.org/doc/Documentation/prctl/seccomp_filter.txt)
 
 #### Seccomp escapes
+
+Architecture dependent syscall numbers
+
+ptrace is disabled by default and you should not enable it because it allows bypassing seccomp
+https://gist.github.com/thejh/8346f47e359adecd1d53
 
 seccomp
 prctl
