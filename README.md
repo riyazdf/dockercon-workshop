@@ -116,13 +116,13 @@ usage: capsh [args ...]
 You can use libcap:
 
 ```
-setcap cap_net_raw=ep $file
+$ setcap cap_net_raw=ep $file
 ```
 
 Or libcap-ng:
 
 ```
-filecap /absolute/path net_raw
+$ filecap /absolute/path net_raw
 ```
 
 **Auditing**
@@ -132,19 +132,19 @@ There are multiple ways to read out the capabilites from a file.
 Using libcap:
 
 ```
-getcap $file
+$ getcap $file
 ```
 
 Using libcap-ng:
 
 ```
-filecap /absolue/path/to/file
+$ filecap /absolue/path/to/file
 ```
 
 Using extended attributes (attr package):
 
 ```
-getfattr -n security.capability $file
+$ getfattr -n security.capability $file
 # file: $file
 security.capability=0sAQAAAgAgAAAAAAAAAAAAAAAAAAA=
 ```
@@ -160,7 +160,7 @@ $ docker run --rm -it alpine chown nobody /
 This shows that the chown command works when it has only the chown capability.
 
 ```
-docker run --rm -it --cap-drop ALL --cap-add CHOWN alpine chown nobody /
+$ docker run --rm -it --cap-drop ALL --cap-add CHOWN alpine chown nobody /
 ```
 
 This fails because we removed the chown capability from root.
@@ -225,20 +225,24 @@ These filters can be used to significantly limit the attack surface of the linux
 
 ### Checking if seccomp is enabled:
 
-```
-zgrep SECCOMP /proc/config.gz
-```
-
-or in any version of docker:
+In the kernel:
 
 ```
-docker run --rm alpine grep Seccomp /proc/self/status
+$ grep SECCOMP /boot/config-$(uname -r) # or zgrep SECCOMP /proc/config.gz
+CONFIG_SECCOMP=y
+CONFIG_SECCOMP_FILTER=y
 ```
 
-or in docker 1.12:
+In docker:
 
 ```
-docker info
+$ docker run --rm alpine grep Seccomp /proc/self/status
+```
+
+In docker 1.12:
+
+```
+$ docker info
 ```
 
 ### Seccomp and Docker
@@ -259,7 +263,7 @@ The following example uses one of the profiles included in this guide to show ho
 This is a reliable way to make sure your seccomp profile is enforced.
 
 ```
-docker run --rm -it --cap-add ALL --security-opt apparmor=unconfined --security-opt seccomp=./profiles/deny.json alpine sh
+$ docker run --rm -it --cap-add ALL --security-opt apparmor=unconfined --security-opt seccomp=./profiles/deny.json alpine sh
 ```
 
 ### Writing a seccomp profile
@@ -347,7 +351,7 @@ It's a very good starting point for writing seccomp policies.
 Here's an example of how we can list all system calls made by `ls`:
 
 ```
-strace -c -f -S name ls 2>&1 1>/dev/null | tail -n +3 | head -n -2 | awk '{print $(NF)}'
+$ strace -c -f -S name ls 2>&1 1>/dev/null | tail -n +3 | head -n -2 | awk '{print $(NF)}'
 ```
 
 ### Demo
@@ -426,7 +430,7 @@ write
 Turn that list into a profile. This sed command might save you some time:
 
 ```
-sed 's/.*/\\t\\t{\\n\\t\\t\\t"name": "\\0",\\n\\t\\t\\t"action":"SCMP_ACT_ALLOW",\\n\\t\\t\\t"args": []\\n\\t\\t},/'
+$ sed 's/.*/\\t\\t{\\n\\t\\t\\t"name": "\\0",\\n\\t\\t\\t"action":"SCMP_ACT_ALLOW",\\n\\t\\t\\t"args": []\\n\\t\\t},/'
 ```
 
 The profile should look like this (you can find it in `seccomp-profiles/memcached.json`):
@@ -528,7 +532,7 @@ See the man page for all the details: http://man7.org/linux/man-pages/man2/secco
 You can enable JITing of BPF filters (if it isn't already enabled) this way:
 
 ```
-echo 1 > /proc/sys/net/core/bpf_jit_enable
+$ echo 1 > /proc/sys/net/core/bpf_jit_enable
 ```
 
 There is no easy to use seccomp in a mode that reports errors without crashing the program, but it's possible to implement in one of several ways.
