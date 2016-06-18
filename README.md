@@ -1,7 +1,9 @@
 # dockercon-workshop
 #### Dockercon 2016 Security Workshop
 
-_Note: this exercise assumes your are on a host with direct access to the docker daemon and docker 1.10+, the instructions below are tailored to Ubuntu 16.04 running docker 1.11_
+_Note: this exercise assumes your are on a host with direct access to the docker daemon and docker 1.10+, the instructions below are tailored to Ubuntu 15.10 running docker 1.11_
+
+_Note: unfortunately this functionality has an open and documented issue with Ubuntu 16.04 xenial: https://github.com/opencontainers/runc/issues/769_
 
 ## Users in docker
 
@@ -46,7 +48,18 @@ For our next exercise, we'll enable user namespaces on our docker daemon:
 
     When you look closely, you'll notice that `dockremap` is allocated a particular block of 65536 PIDs, with the `X` number shown in the `X:65536` mapping to root in a container user namespace.  Check out the [daemon documentation](https://docs.docker.com/v1.10/engine/reference/commandline/daemon/#starting-the-daemon-with-user-namespaces-enabled) for more information.
 
-3.  Let's check that we enabled user namespaces correctly!  Start an interactive alpine container: `docker run --rm -it alpine sh` and run `id`.  What do you see?  Try to also mount volumes that are owned by root on the end host (like `/proc`) -- can you access these from within the container?
+3.  Let's check that we enabled user namespaces correctly!  Start an interactive alpine container: `docker run --rm -it alpine sh` and run `id`.  What do you see?
 
-    Also try running the same run command with the `--privileged` flag -- what do you see?  Privileged mode is incompatible with user namespaces, so the command will fail!
+    Note: if you're troubleshooting, it's worth trying to delete all of your previous docker images (`docker rmi`) and volumes (`docker volume rm`), since the permissions change with user namespaces enabled.
+
+4.  Also try running the same run command with the `--privileged` flag -- what do you see?  Privileged mode is incompatible with user namespaces, so the command will fail!
+
+5.  Let's confirm that your container is in its own user namespace by messing with your system's binaries.  Run a busybox container and mount in your `/bin` directory: ` docker run -v /bin:/host/bin -ti busybox /bin/sh`
+
+	Once your container is running, `cd /host/bin` and try copying, moving, or removing a binary -- it will fail!
+
+	```
+	/host/bin # rm sh
+    rm: can't remove 'sh': Permission denied
+    ```
 
