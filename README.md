@@ -263,7 +263,7 @@ The following example uses one of the profiles included in this guide to show ho
 This is a reliable way to make sure your seccomp profile is enforced.
 
 ```
-$ docker run --rm -it --cap-add ALL --security-opt apparmor=unconfined --security-opt seccomp=./profiles/deny.json alpine sh
+$ docker run --rm -it --cap-add ALL --security-opt apparmor=unconfined --security-opt seccomp=seccomp-profiles/deny.json alpine sh
 ```
 
 ### Writing a seccomp profile
