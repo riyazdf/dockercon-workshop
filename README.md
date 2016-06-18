@@ -506,12 +506,12 @@ https://gist.github.com/thejh/8346f47e359adecd1d53
 
 * Seccomp is supported as of Docker 1.10.
 
-* Using `--privileged` disables seccomp.
+* Using `--privileged` disables seccomp in all versions of docker even if you specify a seccomp profile with it.
 In general you should try to avoid ever using `--privileged` because it does too many things.
 You can achieve the same goal with `--cap-add ALL --security-opt apparmor=unconfined --security-opt seccomp=unconfined`.
 If you need access to devices use `--device`.
 
-* Docker exec `--privileged` does not bypass seccomp. This may change in future versions https://github.com/docker/docker/issues/21984
+* In docker 1.10-1.12+ docker exec `--privileged` does not bypass seccomp. This may change in future versions https://github.com/docker/docker/issues/21984
 
 * In docker 1.12+ adding a capability disables the relevant seccomp filter in the default seccomp profile. It can't disable apparmor, though.
 
