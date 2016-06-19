@@ -301,6 +301,7 @@ The most authoritative source for how to write a docker seccomp profile is the s
 
 The possible actions in order of precedence (higher actions overrule lower actions):
 
+| Action         | Description                                                              |
 |----------------|--------------------------------------------------------------------------|
 | SCMP_ACT_KILL  | Kill with a exit status of `0x80 + 31 (SIGSYS) = 159`                    |
 | SCMP_ACT_TRAP  | Send a `SIGSYS` signal without executing the system call                 |
@@ -356,124 +357,10 @@ $ strace -c -f -S name ls 2>&1 1>/dev/null | tail -n +3 | head -n -2 | awk '{pri
 
 ### Demo
 
-Inspiration for this demo:
-Seccomp sandboxes and memcached example, part 2 by Stanisław Pitucha
-http://blog.viraptor.info/post/seccomp-sandboxes-and-memcached-example-part-2
-
-(Optional) Preparation
+By copying the default docker profile and then removing system calls selectively we can show that we are able to intercept system calls with seccomp. For this demo we've removed chmod, fchmod and chmodat from the default profile.
 
 ```
-$ docker run --name mem alpine sh -c 'apk add -U strace memcached'
-$ docker commit mem vikstrous/seccomp-demo
-```
-
-Tracing
-
-```
-$ docker run --rm -it --cap-add SYS_PTRACE --security-opt seccomp=unconfined vikstrous/seccomp-demo strace memcached -u root
-```
-
-Taking a sample
-
-```
-$ docker run --rm -it --cap-add SYS_PTRACE --security-opt seccomp=unconfined vikstrous/seccomp-demo strace -c -f -S name memcached -u root > table.txt
-```
-
-Cleaning up
-
-```
-$ cat table.txt | grep -v strace | tail -n +3 | head -n -2 | awk '{print $(NF)}'
-```
-
-Result:
-
-```
-arch_prctl
-bind
-brk
-clock_gettime
-clone
-close
-connect
-dup
-epoll_create1
-epoll_ctl
-epoll_pwait
-execve
-fcntl
-fstat
-futex
-geteuid
-getsockname
-getsockopt
-getuid
-listen
-mmap
-mprotect
-nanosleep
-open
-pipe
-prlimit64
-read
-readv
-rt_sigaction
-rt_sigprocmask
-set_tid_address
-setgid
-setsockopt
-setuid
-socket
-socketpair
-write
-```
-
-Turn that list into a profile. This sed command might save you some time:
-
-```
-$ sed 's/.*/\\t\\t{\\n\\t\\t\\t"name": "\\0",\\n\\t\\t\\t"action":"SCMP_ACT_ALLOW",\\n\\t\\t\\t"args": []\\n\\t\\t},/'
-```
-
-The profile should look like this (you can find it in `seccomp-profiles/memcached.json`):
-
-```
-{
-	"defaultAction": "SCMP_ACT_ERRNO",
-	"architectures": [
-		"SCMP_ARCH_X86_64",
-		"SCMP_ARCH_X86",
-		"SCMP_ARCH_X32"
-	],
-	"syscalls": [
-		{
-			"name": "read",
-			"action": "SCMP_ACT_ALLOW",
-			"args": []
-		},
-        ...
-    }
-}
-```
-
-Test out our profile
-
-TODO: this doesn't work
-
-```
-$ docker run --rm -it --security-opt seccomp=memcached.json vikstrous/seccomp-demo memcached -u root
-$ telnet localhost 11211
-stats
-quit
-```
-
-Let's restrict the ports it can listen on
-
-```
-$ docker run -u nobody vikstrous/seccomp-demo strace memcached 2>&1 | grep bind
-bind(26, {sa_family=AF_INET, sin_port=htons(11211), sin_addr=inet_addr("0.0.0.0")}, 16) = 0
-...
-$ docker run -u nobody vikstrous/seccomp-demo strace memcached -p 1234 2>&1 | grep bind
-bind(26, {sa_family=AF_INET, sin_port=htons(1234), sin_addr=inet_addr("0.0.0.0")}, 16) = 0
-...
+$ docker run --rm -it --security-opt seccomp=default-no-chmod.json alpine chmod 777 /
 ```
 
 ### Gotchas
