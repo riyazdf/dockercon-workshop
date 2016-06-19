@@ -186,6 +186,41 @@
 			"name": "write",
 			"action": "SCMP_ACT_ALLOW",
 			"args": []
+		},
+		{
+			"name": "openat",
+			"action": "SCMP_ACT_ALLOW",
+			"args": []
+		},
+		{
+			"name": "getdents",
+			"action": "SCMP_ACT_ALLOW",
+			"args": []
+		},
+		{
+			"name": "getdents64",
+			"action": "SCMP_ACT_ALLOW",
+			"args": []
+		},
+		{
+			"name": "stat",
+			"action": "SCMP_ACT_ALLOW",
+			"args": []
+		},
+		{
+			"name": "lstat",
+			"action": "SCMP_ACT_ALLOW",
+			"args": []
+		},
+		{
+			"name": "readlink",
+			"action": "SCMP_ACT_ALLOW",
+			"args": []
+		},
+		{
+			"name": "readlinkat",
+			"action": "SCMP_ACT_ALLOW",
+			"args": []
 		}
 	]
 }
