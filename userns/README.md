@@ -220,5 +220,3 @@ You proved that the Docker daemon was running within a user namespace using the 
 
 You can refer to the following resources for more information and help:
 - Docker: http://www.docker.com
-- Forum: ???
-- Videos: ???
