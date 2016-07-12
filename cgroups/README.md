@@ -268,9 +268,7 @@ In this step you will use the `--pids-limit` flag to limit the number of process
    root@c0eb76d2481c:/#
    ```
 
-  **Do not proceed to the next step** if you receive the following warning about pids limit support - *"WARNING: Your kernel does not support pids limit capabilities, pids limit discarded"*.
-
-  > **Note:** I've not included the link to the video showing the fork bomb as I'm not sure what policy is on linking to external videos that might or might not be there in the future when users run the lab.  This is the link though just in case somebody does decide to include it in a revision of this HOL - https://asciinema.org/a/cw02ou3qjbojlf3peh2tdaff1?loop=1&speed=4
+  **Do not proceed to the next step** if you receive the following warning about pids limit support - *"WARNING: Your kernel does not support pids limit capabilities, pids limit discarded"*. If you receive this warning, you can [watch the demo](https://asciinema.org/a/dewdpjlzom4zasdz0c0c46jt9) as a video instead.
 
 2.  Run the following command to create a fork bomb in the container you just started.
 
@@ -311,5 +309,3 @@ Congratulations. You've seen how to use some of the **cgroups** features support
 
 You can refer to the following resources for more information and help:
 - Docker: http://www.docker.com
-- Forum: ???
-- Videos: ???
