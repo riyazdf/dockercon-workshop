@@ -1,103 +1,487 @@
 # dockercon-workshop
 #### Dockercon 2016 Security Workshop
 
-_Note: this exercise requires a host with AppArmor capability, such as Ubuntu 16.04_
+# Lab: AppArmor
 
-AppArmor is a Linux Security Module (LSM) that protects an operating system by applying profiles to applications.
-In contrast to managing capabilities with `CAP_DROP` and syscalls with Seccomp, AppArmor allows for much finer-grained
-security profile control -- for example, AppArmor can restrict file operations on specified paths.
+> **Difficulty**: Advanced
+
+> **Time**: Approximately 25 minutes
+
+AppArmor (Application Armor) is a Linux Security Module (LSM). It protects the operating system by applying profiles to individual applications. In contrast to managing *capabilities* with `CAP_DROP` and syscalls with *seccomp*, AppArmor allows for much finer-grained control. For example, AppArmor can restrict file operations on specified paths.
+
+In this lab you will learn the basics of AppArmor and how to use it with Docker for improved security.
+
+You will complete the following steps as part of this lab.
+
+- [Step 1 - AppArmor primer](#primer)
+- [Step 2 - The `default-docker` AppArmor profile](#default-docker)
+- [Step 3 - Running a Container without an AppArmor profile](#no-profile)
+- [Step 4 - AppArmor and defense in depth](#depth)
+- [Step 5 - Custom AppArmor profile](#custom)
+- [Step 6 - Extra for experts](#extra)
+
+# Prerequisites
+
+You will need all of the following to complete this lab:
+
+- A Linux-based Docker Host with AppArmor enabled in the kernel
+- Docker 1.12 or higher
+
+The following command shows you how to check if AppArmor is enabled in your system's kernel:
+
+   Check from Docker 1.12 or higher
+   ```
+   $ docker version | grep apparmor
+   Security Options: apparmor seccomp   
+   ```
+   If the above output does not return a line with `apparmor` then your system does not have AppArmor enabled in its kernel.
 
 
-By default, Docker runs containers with the `docker-default` AppArmor profile, which is described in the [documentation here](https://docs.docker.com/engine/security/apparmor/#understand-the-policies).  Here are some quick pointers for how to understand AppArmor profiles:
-  
-  - The include statements (such `#include <abstractions/base>`) behave just like their C-looking counterparts,
-  by expanding to additional AppArmor profile contents
+# <a name="primer"></a>Step 1: AppArmor primer
 
-  - AppArmor is a deny-first system, specified by the `deny` clause.  Once a path or other resource is denied, it is impossible
-  to regain access to it with an `owner` statement in the same profile
+By default, Docker applies the `docker-default` AppArmor profile to new containers. This profile is located in `/etc/apparmor.d/docker/` and you can find more information about it in the [documentation](https://docs.docker.com/engine/security/apparmor/#understand-the-policies).  
 
-  - For file operations, `r` corresponds to read, `w` to write, `k` to lock, `l` to link, and `x` to execute
+Here are some quick pointers for how to understand AppArmor profiles:
 
- This should get you started fairly well with AppArmor, but for more information you can consult the official [AppArmor documentation wiki](http://wiki.apparmor.net/index.php/Documentation) (under active development at this time).
+  - `Include` statements, such as `#include <abstractions/base>`, behave just like their `C` counterparts by expanding to additional AppArmor profile contents.
 
-## Default AppArmor in Docker
+  - AppArmor `deny` rules are evaluated first and have precedence over `allow` and `owner` rules. This means that deny rules cannot be overridden by subsequent allow or owner rules for the same resource.
 
-1.  We can view the status of AppArmor on our Docker host by running `apparmor_status` (may require admin credentials) -- you should notice the `docker-default` profile is in enforce mode.  As described above, this is Docker's default AppArmor profile that is applied to containers on `docker run`.
+  - For file operations, `r` corresponds to read, `w` to write, `k` to lock, `l` to link, and `x` to execute.
 
-2.  To prove that this profile is applied by default, run an alpine container in another terminal `docker run --rm -it alpine sh` and then check `apparmor_status` again.  You should now see that a process (our alpine container!) has a profile defined and is also in enforce mode:
+For more information, see the [official AppArmor documentation wiki](http://wiki.apparmor.net/index.php/Documentation) (under active development at this time).
+
+# <a name="default-docker"></a>Step 2: The `default-docker` AppArmor profile
+
+In this step you will check the status of AppArmor on your Docker Host and learn how to identify whether or not Docker containers are running with an AppArmor profile.
+
+1.  View the status of AppArmor on your Docker Host with the `apparmor_status` command.
+
+   ```
+   $ apparmor_status
+   apparmor module is loaded.
+   10 profiles are loaded.
+   10 profiles are in enforce mode.
+      /sbin/dhclient
+      /usr/bin/lxc-start
+      /usr/lib/NetworkManager/nm-dhcp-client.action
+      /usr/lib/NetworkManager/nm-dhcp-helper
+      /usr/lib/connman/scripts/dhclient-script
+      /usr/sbin/tcpdump
+      docker-default
+      lxc-container-default
+      lxc-container-default-with-mounting
+      lxc-container-default-with-nesting
+   0 profiles are in complain mode.
+   2 processes have profiles defined.
+   2 processes are in enforce mode.
+      /sbin/dhclient (610)
+   0 processes are in complain mode.
+   0 processes are unconfined but have a profile defined.
+   ```
+
+   The command may require admin credentials.
+
+   Notice the `docker-default` profile is in enforce mode. This is the AppArmor profile that will be applied to new containers unless overridden with the `--security-opts` flag.
+
+2.  Run a new container and put it in the back ground.
+
+   ```
+   $ sudo docker run -dit alpine sh
+   ```
+
+3. Confirm that the container is running.
+
+   ```
+   $ sudo docker ps
+   CONTAINER ID        IMAGE               COMMAND             CREATED             STATUS              PORTS               NAMES
+1bb16561bc06        alpine              "sh"                2 seconds ago       Up 2 seconds                            sick_booth
+   ```
+
+4. Run the `apparmor_status` command again.
+
+   ```
+   $ apparmor_status
+   apparmor module is loaded.
+   10 profiles are loaded.
+   10 profiles are in enforce mode.
+      /sbin/dhclient
+      docker-default
+      <SNIP>
+   0 profiles are in complain mode.
+   3 processes have profiles defined.
+   3 processes are in enforce mode.
+      /sbin/dhclient (610)
+      docker-default (19810)
+   0 processes are in complain mode.
+   0 processes are unconfined but have a profile defined.
+   ```
+
+   Notice that `docker-default` is now also listed under **processes are in enforcing mode.** The value in parenthesis is the PID of the container's process as seen from the PID namespace of the Docker Host. If you have multiple containers running you will see multiple `docker-default` policies listed under **processes in enforcing mode**.
+
+    Profiles in *enforce mode* will actively deny operations based on the AppArmor profile. Profiles in *complain mode* will log profile violations but will not block functionality.
+
+5. Stop and remove the container started in the previous steps.
+
+   The example below uses the Container ID "1bb16561bc06". This will be different in your environment.
+
+   ```
+   $ sudo docker rm -f 1bb16561bc06
+   1bb16561bc06
+   ```
+
+In this step you learned how to check the AppArmor status on your Docker Host and how to check if a container is running with the `default-docker` AppArmor profile.
+
+# <a name="no-profile"></a>Step 3: Running a container without an AppArmor profile
+
+In this step you will see how to run a new container without an AppArmor profile.
+
+1. If you haven't already done so, stop and remove all containers on your system.
+
+   ```
+   $ sudo docker rm -f $(docker ps -aq)
+   ```
+
+2. Use the `--security-opt apparmor=unconfined` flag to start a new container in the background without an AppArmor profile.
+
+   ```
+   $ sudo docker run -dit --security-opt apparmor=unconfined alpine sh
+   ace79581a19ace7b85009480a64fd378d43844f82559bd1178fce431e292277d
+   ```
+
+3. Confirm that the container is running.
+
+   ```
+   $ sudo docker ps
+   CONTAINER ID        IMAGE               COMMAND             CREATED             STATUS              PORTS               NAMES
+ace79581a19a        alpine              "sh"                41 seconds ago      Up 40 seconds                           sharp_knuth
+   ```
+
+4. Use the `apparmor_status` command to verify that the new container is not running with an AppArmor profile.
+
+   ```
+   $ apparmor_status
+   apparmor module is loaded.
+   <SNIP>
+      1 processes are in enforce mode.
+      /sbin/dhclient (610)
+   0 processes are in complain mode.
+   0 processes are unconfined but have a profile defined.
+   ```
+
+   Notice that there are no instances of the `docker-default` AppArmor profile loaded under the **processes in enforce mode** section. This means that the container you just started does not have the `docker-default` AppArmor profile attached to it.
+
+5. Stop and remove the container started in the previous steps.
+
+   The example below uses the Container ID "ace79581a19a". This will be different in your environment.
+
+   ```
+   $ sudo docker rm -f ace79581a19a
+   ace79581a19a
+   ```
+
+In this step you learned that the `--security-opt apparmor=unconfined` flag will start a new container without an AppArmor profile.
+
+# <a name="depth"></a>Step 4: AppArmor and defense in depth
+
+Defense in depth is a model where multiple different lines of defense work together to provide increased overall defensive capabilities. Docker uses AppArmor, seccomp, and Capabilities to form a deep defense system.
+
+In this step you will see how AppArmor can protect a Docker Host even when other lines of defense such as seccomp and Capabilities are not effective.
+
+1. If you haven't already done so, stop and remove all containers on your system.
+
+   ```
+   $ sudo docker rm -f $(docker ps -aq)
+   ```
+
+2. Start a new Ubuntu container with seccomp disabled and the `SYS_ADMIN` *capability* added.
+
+   ```
+   $ sudo docker run --rm -it --cap-add SYS_ADMIN --security-opt seccomp=unconfined ubuntu sh
+   #
+   ```
+
+   This command will start a new container with the `default-docker` AppArmor profile automatically attached. seccomp will be disabled and the CAP_SYS_ADMIN capability added. This means that AppArmor will be the only effective line of defense for this container.
+
+3. Make two new directories and bind mount them as shown below.
+
+   Run this command from within the container you just created.
+
+   ```
+   # mkdir 1; mkdir 2; mount --bind 1 2
+   mount: mount /1 on /2 failed: Permission denied
+   ```
+
+   The operation failed because the `default-docker` AppArmor profile denied the operation.
+
+4. Exit the container.
+
+5. Confirm that it was the `default-docker` AppArmor profile that denied the operation by starting a new container without an AppArmor profile and retrying the same operation.
+
+   ```
+   $ sudo docker run --rm -it --cap-add SYS_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=unconfined ubuntu sh
+
+   # mkdir 1; mkdir 2; mount --bind 1 2
+   # ls -l
+   total 456
+   drwxr-xr-x   2 root root   4096 Jul 26 11:44 1
+   drwxr-xr-x   2 root root   4096 Jul 26 11:44 2
+   drwxr-xr-x   2 root root   4096 Jul  6 23:15 bin
+   drwxr-xr-x   2 root root   4096 Apr 12 20:14 boot
+   <SNIP>
+   ```
+
+   The operation succeeded this time. This proves that it was the `default-docker` AppArmor profile that prevented the operation in the previous attempt.
+
+In this step you have seen how AppArmor works together with seccomp and Capabilities to form a defense in depth security model for Docker. You saw a scenario where even with seccomp and Capabilities not preventing an action, AppArmor still prevented it.
+
+# <a name="custom"></a>Step 5: Custom AppArmor profile
+
+The [Panama Papers hack](https://en.wikipedia.org/wiki/Panama_Papers) exposed millions of documents from Mossack Fonseca, a Panamanian law firm.  
+
+A probable cause, as described by [Wordfence](https://www.wordfence.com/blog/2016/04/mossack-fonseca-breach-vulnerable-slider-revolution/) and other reports, was an unpatched WordPress plugin. In particular, it has been suggested that the Revolution Slider plugin contained buggy code that allowed another plugin to take its place by making an [unauthenticated AJAX call to the plugin](https://www.wordfence.com/wp-content/uploads/2016/04/Screen-Shot-2016-04-07-at-10.31.37-AM.png).
+
+WordPress and its plugins run as PHP. This means an attacker could upload their own malicious plugin to start a shell on WordPress by simply sending a request to the PHP resource to run the malicious code and spin up the shell.
+
+In this step we'll show how a custom AppArmor profile could have protected Dockerized WordPress from this attack vector.
+
+1.  If you have not already, `cd` into the lab's `wordpress` directory.
+
+   ```
+   $ cd dockercon-workshop/apparmor/wordpress
+   ```
+
+2.  List the files in the directory.
+
+   ```
+   $ ls -l
+   total 24
+   -rw-r--r-- 1 root root  628 Jul 11 10:47 docker-compose.yml
+   -rw-r--r-- 1 root root  443 Jul 11 10:47 Dockerfile
+   drwxr-xr-x 5 root root 4096 Jul 11 10:47 html
+   -rw-r--r-- 1 root root  172 Jul 11 10:47 php.ini
+   -rw-r--r-- 1 root root 1697 Jul 11 10:47 wparmor
+   drwxr-xr-x 6 root root 4096 Jul 11 10:47 zues
+   ```
+
+3. View the contents of the Docker Compose YAML file.
+
+   ```
+   cat docker-compose.yml
+   wordpress:
+    image: endophage/wordpress:lean
+    links:
+        - mysql
+    ports:
+        - "8080:80"
+    environment:
+        - DB_PASSWORD=2671d40f658f595f49cd585db8e522cc955d916ee92b67002adcf8127196e6b2
+    cpuset: "0"
+    cap_drop:
+        - ALL
+    cap_add:
+        - SETUID
+        - SETGID
+        - DAC_OVERRIDE
+        - NET_BIND_SERVICE
+    # **YOUR WORK HERE**
+    # Add an apparmor profile to this image
+mysql:
+    image: mariadb:10.1.10
+    environment:
+        - MYSQL_DATABASE=wordpress
+        - MYSQL_ROOT_PASSWORD=2671d40f658f595f49cd585db8e522cc955d916ee92b67002adcf8127196e6b2
+    ports:
+        - "3306"
+   ```
+
+   You can see that the file is describing a WordPress application with two services:
+    - **wordpress:** a wordpress container that wraps Apache PHP
+    - **mysql:** a database to store data  
+
+4. Bring the application up.
+
+   ```
+   $ sudo docker-compose up &
+   Pulling mysql (mariadb:10.1.10)...
+   10.1.10: Pulling from library/mariadb
+   03e1855d4f31: Pull complete
+   a3ed95caeb02: Pull complete
+   <SNIP>
+   mysql_1      | Version: '10.1.10-MariaDB-1~jessie'  socket: '/var/run/mysqld/mysqld.sock'  port: 3306  mariadb.org binary distribution
+   wordpress_1  | [Tue Jul 26 12:51:36.992860 2016] [mpm_prefork:notice] [pid 1] AH00163: Apache/2.4.10 (Debian) PHP/5.6.18 configured -- resuming normal operations
+   wordpress_1  | [Tue Jul 26 12:51:36.992956 2016] [core:notice] [pid 1] AH00094: Command line: 'apache2 -D FOREGROUND'
+   ```
+
+5.  Point your browser to the public IP of your lab instance on port 8080.
+
+   You should have received the IP addresses of all of your lab instances from the lab administrator).
+
+   ![](http://i.imgur.com/13Pf7Zm.png)
+
+6. Select your language, click **Continue** and complete the information required on the Welcome page. Make sure you remember the username and password you choose.
+
+7. Login with the username and password you created.
+
+8. Click **Plugins** from the left-hand navigation pane and install a plugin.
+
+   You should notice that the `docker-default` AppArmor prfile does not restrict the plugin installation.
+
+9. Get the name of the WordPress container that is running as part of your WordPress app.
+
+   ```
+   $ sudo docker-compose ps
+   Name                      Command              State            Ports
+   --------------------------------------------------------------------------------------
+   wordpress_mysql_1       /docker-entrypoint.sh mysqld   Up      0.0.0.0:32769->3306/tcp
+   wordpress_wordpress_1   apache2-foreground             Up      0.0.0.0:8080->80/tcp
+   ```
+
+   The container that you want is named `wordpress_wordpress_1`.
+
+10. Get shell access into the container.
+
+   ```
+   $ sudo docker exec -it wordpress_wordpress_1 bash
+   root@b695d2439221:/var/www/html#
+   ```
+
+11. Attempt to gain access to the Docker Hosts underlying filesystem.
+
+   **NOTE TO LAB OWNER: NEED INFO ON HOW A LAB USER MIGHT TRY THIS???**
+
+12. Exit the container.
+
+In the next few steps you'll apply a new Apparmor profile to a new WordPress container. The purpose of this is to prevent malicious themes and plugins from being uploaded and installed on our WordPress instance.
+
+13. Bring the WordPress application down.
+
+   Run this command from the shell of your Docker Host, not the shell of the `wordpress` container.
+
+   ```
+   $ sudo docker-compose down
+   Stopping wordpress_wordpress_1 ...
+   Stopping wordpress_mysql_1 ...
+   <SNIP>
+   Stopping wordpress_mysql_1 ... done
+   Removing wordpress_wordpress_1 ... done
+   Removing wordpress_mysql_1 ... done
+   ```
+
+14. Add the `wparmor` profile to the `wordpress` service in the `docker-compose.yml` file.
+
+   ```
+   wordpress:
+    image: endophage/wordpress:lean
+    links:
+        - mysql
+    <SNIP>
+    security_opt:
+        - apparmor=wparmor
+   mysql:
+    image: mariadb:10.1.10
+    environment:
+        - MYSQL_DATABASE=wordpress
+        - MYSQL_ROOT_PASSWORD=2671d40f658f595f49cd585db8e522cc955d916ee92b67002adcf8127196e6b2
+    ports:
+        - "3306"
+   ```
+
+   If you look closely at the output above, you will see that two new lines have been added above the start of the `mysql` service definition -
+
+   **security_opt:**
+       - **apparmor=wparmor**
+
+15. Edit the `wparmor` profile to deny every directory under `/var/www/html/wp-content` except for the `uploads` directory (which is used for media).  
+
+   To do this, add the following three lines towards the bottom of the file where it says "**YOUR WORK HERE**".
+
+   ```
+   deny /var/www/html/wp-content/plugins/** wlx,
+   deny /var/www/html/wp-content/themes/** wlx,
+   owner /var/www.html/wp-content/uploads/** rw,
+   ```
+
+   The `*` wildcard is only for files at a single level. The `**` wildcard will traverse subdirectories.  
+
+16. Parse the `wparmor` profile.  
+
+   ```
+   $ sudo apparmor_parser wparmor
+   ```
+
+18. Bring the Docker Compose WordPress app back up.
+
+   ```
+   $ sudo docker-compose up &
+   Pulling mysql (mariadb:10.1.10)...
+   10.1.10: Pulling from library/mariadb
+   03e1855d4f31: Pull complete
+   a3ed95caeb02: Pull complete
+   <SNIP>
+   mysql_1      | Version: '10.1.10-MariaDB-1~jessie'  socket: '/var/run/mysqld/mysqld.sock'  port: 3306  mariadb.org binary distribution
+   wordpress_1  | [Tue Jul 26 12:51:36.992860 2016] [mpm_prefork:notice] [pid 1] AH00163: Apache/2.4.10 (Debian) PHP/5.6.18 configured -- resuming normal operations
+   wordpress_1  | [Tue Jul 26 12:51:36.992956 2016] [core:notice] [pid 1] AH00094: Command line: 'apache2 -D FOREGROUND'
+   ```
+
+19. Verify that the app is up.
+
+   ```
+   $ sudo docker-compose ps
+   Name                      Command              State            Ports
+   --------------------------------------------------------------------------------------
+   wordpress_mysql_1       /docker-entrypoint.sh mysqld   Up      0.0.0.0:32770->3306/tcp
+   wordpress_wordpress_1   apache2-foreground             Up      0.0.0.0:8080->80/tcp
+   ```
+
+20. Test that the AppArmor profile is working by uploading an image to the site via the WordPress UI and then trying to upload a plugin. The image upload will work but the plugin upload will fail (when the usual method for uploading plugins fails, WordPress prompts you to upload via FTP - this is a sign that the AppArmor profile has worked).
+
+21. Bring the application down.
+
+   ```
+   $ sudo docker-compose down
+   ```
+
+Congratulations!  You've secured a WordPress instance against adding malicious plugins :)
+
+# <a name="extra"></a>Step 5: Extra for experts
+
+AppArmor profiles are very application-specific. Although we've had some practice writing our own profiles, the preferred method is using tools to generate and debug them. In this step We'll explore `aa-complain` and `aa-genprof` that ship as part of the `apparmor-utils` package.
+
+The following steps assume you are using a modern Ubuntu Linux Docker Host with a GUI installed and the FireFox web browser.
+
+**NOTE TO LAB OWNER: WILL THE ABOVE PRE_REQ BE THE CASE IN DOCKERCON LABS?**
+
+1.  Install the `apparmor-utils` package.
+
     ```
-    1 processes have profiles defined.
-    1 processes are in enforce mode.
-       docker-default (28462)
+    $ sudo apt install apparmor-utils -y
     ```
 
-    Enforce mode will actively deny various operations due to the AppArmor profile; complain mode will only log profile violations but not block any functionality.
+2.  Start `aa-genprof` to automatically generate a new AppArmor profile for the FireFox app.
 
-3.  Now kill that container and start another alpine container, but this time without an AppArmor profile.  In order to disable AppArmor, we must pass an additional flag to Docker: `docker run --rm -it --security-opt apparmor=unconfined alpine sh`.  Check `apparmor_status` in another terminal to confirm that this container is not running with a profile.
+   ```
+   $ sudo aa-genprof firefox
+   ```
 
-4.  Let's understand the default AppArmor profile, and the defense-in-depth of the Docker engine profiles.  AppArmor works together with Seccomp and a capabilities whitelist to provide security by default:
-	- Disable seccomp and add the `SYS_ADMIN` capability while running an Ubuntu container: `docker run --rm -it --cap-add SYS_ADMIN --security-opt seccomp=unconfined ubuntu sh`
+	Your terminal will go into interactive mode. This is AppArmor watching the Firefox app.
 
-	- Make two directories and run mount to bind them: `mkdir 1; mkdir 2; mount --bind 1 2` -- you should receive a permissions error because the `docker-default` AppArmor profile will deny mount!
+3. Open Firefox and perform normal web browsing activities such as browsing websites and downloading content.
 
-	- To convince yourself this is the case, run the same commands with AppArmor also disabled: `docker run --rm -it --cap-add SYS_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=unconfined ubuntu sh`
+4. Go back to the terminal running `aa-genprof` and press `s` to view events from the system log and decide whether or not to include these events in your AppArmor profile as an allow or deny statement.  
 
+5. When you're done, press `f` to finish.
 
-## Our Custom AppArmor Profile
+   The AppArmor profile will be called `usr.bin.firefox` and will be stored in `/etc/apparmor.d/` on Ubuntu systems.
 
-The Panama Papers hack exposed millions of documents from Mossack Fonseca, a Panamanian law firm.  A probable cause, as described by [Wordfence](https://www.wordfence.com/blog/2016/04/mossack-fonseca-breach-vulnerable-slider-revolution/) and other reports was an unpatched Wordpress plugin -- in particular, the Revolution Slider plugin contained buggy code that allowed a new plugin to take its place by making an [unauthenticated AJAX call to the plugin](https://www.wordfence.com/wp-content/uploads/2016/04/Screen-Shot-2016-04-07-at-10.31.37-AM.png).
+   You can also use `aa-autodep` to automatically generate profiles, but this will create an even more minimal profile.
 
+To further refine an existing profile, `aa-logprof` operates in the same manner as `aa-genprof` but for amending a profile by scanning logs.
 
-Since Wordpress and its plugins run as PHP, an attacker could upload their own malicious plugin to start a shell on Wordpress, and simply send a request to the PHP resource to run the malicious code to spin up the shell.
+You can debug AppArmor profiles with `aa-complain`. As described earlier, AppArmor has a "complain" mode that logs disallowed events instead of actively blocking them. This is a great tool for testing and debugging.
 
+Type the following command to view the Firefox profile - `sudo aa-complain /etc/apparmor.d/usr.bin.firefox`. Confirm that this set the Firefox policy to complain mode by running `apparmor_status`.  
 
-We'll show how a custom AppArmor profile could have protected Wordpress from this attack vector, in a Docker container.
+To view any complaints from apparmor, run `dmesg`.
 
-
-1.  Check out the `apparmor` branch and traverse to the wordpress directory: `cd wordpress`
-
-2.  Open the docker-compose file (`docker-compose.yml`) -- you'll notice we define Wordpress with two containers - a wordpress container that wraps Apache PHP, and a database to store data.  Build and spin up wordpress with the `docker-compose build` and `docker-compose up` commands.
-
-3.  After bringing up wordpress with `docker-compose up`, visit your local instance of wordpress at `https://<PUBLIC_IP>:8080` and set up an account.  After you've logged in, notice how you can add any plugin without any restriction through the Plugins tab on the webpage; the `docker-default` AppArmor profile does not restrict any wordpress filepath writes.
-
-4.  As is, this wordpress container is vulnerable to the Revolution Slider "update plugin" attack.  Try adding a plugin from the wordpress UI and watch as it succeeds.
-However, note that an attacker would not be able to easily pivot to view underlying files on the host since our wordpress setup is in a container.  To convince yourself this is the case, `docker exec` into the wordpress container and attempt to access your hosts's filesystem.
-
-5.  Even though the wordpress container is isolated from our host, we'd like to prevent any malicious plugins or themes from being uploaded to our wordpress instance.  As a first step, let's add the `wparmor` AppArmor profile to our `docker-compose.yml` file.  The syntax is similar to the `docker run --security-opt` format: you'll need an outer `security-opt` key with a nested `apparmor=wparmor` key.
-
-6.  If you tried to `docker-compose up` after the last step, you probably received a failure because you hadn't parsed the AppArmor profile yet: to do so, run `sudo apparmor_parse wparmor`.  There's still work to be done on this AppArmor profile, as it does not block uploads.
-
-7.  Edit the `wparmor` profile to deny every directory under `/var/www/html` except for the `uploads` directory (which is used for media).  Note that `*` wildcard is only for files at a single level, whereas `**` will traverse to subdirectories.  Also as we described earlier, if a path is denied by an AppArmor profile statement, an `owner` statement cannot overwrite it -- you should add 3 lines to the `wparmor` file in this step, two `deny` and one `owner` for `/var/www/html/wp-content/plugins/`, `/var/www/html/wp-content/themes/`, and `/var/www/html/wp-content/uploads/`
-
-8.  Parse the `wparmor` again and bring back up your docker-compose wordpress instance.  Test that your AppArmor profile is correct by successfully uploading an image to the site via the wordpress UI, but not being able to upload a plugin to wordpress.  Note that if the usual upload flow for a plugin fails, wordpress will point you to a FTP upload page.  Also test that you're still able to upload a photo from the media tab.
-
-If you've completed the last step successfully, congratulations!  You've secured a wordpress instance against adding malicious plugins :)
-
-
-## Extra for Experts
-
-AppArmor profiles are quite application-specific -- while we've had some practice at writing our own profiles by hand, wouldn't it be nice to have some tools for debugging and generating AppArmor profiles?  We'll explore `aa-complain` and `aa-genprof` to help us achieve these goals.
-
-1.  On Ubuntu, start by installing `apparmor-utils`:
-
-    `sudo apt install apparmor-utils`
-
-    `apparmor-utils` will install our two tools, as well as other helpful tools.  For more information about this package, read [Ubuntu's guide](https://help.ubuntu.com/lts/serverguide/apparmor.html).
-
-
-2.  Let's use these tools with the Firefox app. Let's start with automatically generating AppArmor profiles with `aa-genprof`:
-
-	`sudo aa-genprof firefox`
-
-	You should see your terminal go into an interactive mode -- this is AppArmor watching the Firefox app.  Go ahead and open the Firefox app and browse some websites, maybe download some content, and generally exercise usual web-browsing behavior.  If you go back to the terminal running `aa-genprof`, you can press `s` to view events from the system log and decide whether or not to include these events in your AppArmor profile as an allow or deny statement.  When you're done, press `f` to finish -- you can view your profile in `/etc/apparmor.d/usr.bin.firefox` on an Ubuntu machine.
-
-	You can also use `aa-autodep` to automatically generate profiles, but this command will create an even more minimal profile.
-
-	To further refine an existing profile, `aa-logprof` operates in the same manner as `aa-genprof` but for amending a profile by scanning logs.
-
-
-3.  Debug AppArmor profiles with `aa-complain`: as described earlier, AppArmor has a "complain" mode of operation that does not actively block any violations to its security profile, but will instead log these events.  This is a fantastic tool for debugging, let's try viewing our Firefox profile:
-
-    `sudo aa-complain /etc/apparmor.d/usr.bin.firefox`
-
-    You can confirm that this set the Firefox policy to complain mode by running `apparmor_status`.  To view any complaints from apparmor, run `dmesg`.
+Congratulations you have completed this lab on AppArmor!
