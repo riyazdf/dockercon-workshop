@@ -113,8 +113,6 @@ It's not easy to find the digest of a particular image tag. This is because it i
 
 Enter Docker Content Trust: a system currently in the Docker Engine that verifies the publisher of images without sacrificing usability. Docker Content Trust implements [The Update Framework](https://theupdateframework.github.io/) (TUF), an NSF-funded research project succeeding Thandy of the Tor project. TUF uses a key hierarchy to ensure recoverable key compromise and robust freshness guarantees.
 
-> **NOTE TO LAB OWNER: I'M UNCERTAIN ABOUT THE STATEMENT "SUCCEEDING THANDY OF THE TOR PROJECT". I'M NOT DOUBTING IT'S CORRECT, I JUST KNOW NOTHING ABOUT THIS SO AM NOT SURE IF I'VE MISUNDERSTOOD IT....**
-
 Under the hood, Docker Content Trust handles name resolution from IMAGE tags to IMAGE digests by signing its own metadata -- when Content Trust is enabled, docker will verify the signatures and expiration dates in the metadata before rewriting a pull by tag command to a pull by digest.
 
 In this step you will enable Docker Content Trust, sign images as you push them, and pull signed and unsigned images.
@@ -224,7 +222,7 @@ In this step you will enable Docker Content Trust, sign images as you push them,
    Tagging nigelpoulton/alpine@sha256:dc89ce8401da81f24f7ba3f0ab2914ed9013608bdba0b7e7e5d964817067dc06 as nigelpoulton/alpine:trusted
    ```
 
-   Take note of the difference between the pull of a signed image with Docker Content Trust enabled and disabled. With Docker Content Trust enabled the image pull is converted froma tagged image pull to a digest image pull.
+   Take note of the difference between the pull of a signed image with Docker Content Trust enabled and disabled. With Docker Content Trust enabled the image pull is converted from a tagged image pull to a digest image pull.
 
 In this step you have seen how to enable and disable Docker Content Trust. You have also seen how to sign images that you push. For more information about Docker Content Trust, see [the documentation](https://docs.docker.com/engine/security/trust/).
 
@@ -337,9 +335,9 @@ Repeat passphrase for new targets key with ID 4bc290d (example.com/scripts):
     - Attempts to publish this target to the server with `notary publish`
     - Fetches and displays all trust data for example.com (verifying output as it is downloaded)
 
-> **NOTE TO LAB OWNER. On my second run through the lab I get "fatal: could not rotate trust to a new trusted root: failed to validate data with current trusted certificates" when trying `notary publish example.com/scripts`, and `notary list example.com/scripts`. This could be a mistake on my behalf, or the fact it's a second run through, as I'm not familiar with Notary, but it would be good if you could add a bit of detail here in case I'm missing something. Cheers.**
-
 To remove targets, you can make use of the `notary remove example.com/scripts <NAME>` command, followed by a `notary publish example.com/scripts`.
+
+Please note that this `docker-compose` setup will persist notary's database data in a volume; if you'd like to wipe out all state when running this lab running multiple times, you will have to remove this volume in addition to restarting the notary server, signer, and database containers.
 
 ### Key rotation with the notary client
 
