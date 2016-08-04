@@ -39,13 +39,11 @@ The Linux kernel lets you set capability *bounding sets* that impose limits on t
 
 Docker imposes certain limitations that make working with capabilities much simpler. For example, file capabilities are stored within a file's extended attributes, and extended attributes are stripped out when Docker images are built. This means you will not normally have to concern yourself too much with file capabilities in containers.
 
-> It is of course possible to get files with capabilities into running containers via volumes, bind mounts, or adding files during run time. However, this is not recommended.
-
-**NOTE TO LAB OWNER: I pretty much took the above recommendation form the original lab text. However, I'm not sure it sounds right as it could sound like we're not recommending volumes etc. You might wanna make some changes to the way I've written that.**
+> It is of course possible to get file capabilities into containers at runtime, however this is not recommended.
 
 In an environment without file based capabilities, it's not possible for applications to escalate their privileges beyond the *bounding set* (a set beyond which capabilities cannot grow). Docker sets the *bounding set* before starting a container. You can use Docker commands to add or remove capabilities to or from the *bounding set*.
 
-**NOTE TO LAB OWNER: I added a quick description of bounding set but I'm no kernel hacker so might be off the mark....**
+By default, Docker drops all capabilities except [those needed](https://github.com/docker/docker/blob/master/oci/defaults_linux.go#L64-L79), using a whitelist approach.
 
 # <a name="docker_cap"></a>Step 2: Working with Docker and capabilities
 
