@@ -1,61 +1,225 @@
 # dockercon-workshop
 #### Dockercon 2016 Security Workshop
 
-## Seccomp
+# Lab: seccomp
 
-Seccomp is a firewall for your system calls.
-It uses Berkeley Packet Filter (BPF) programs to filter system calls and control how they are handled.
-BPF programs are a simple interpreted assemby-like language that is limited in where it can read data from and write data to.
-BPF programs can't have backward jumps and are limited in size.
-This means that there's an upper limit to the run time of filters and they are guaranteed to termminate.
-These filters can be used to significantly limit the attack surface of the linux kernel, especially for simple applications.
+> **Difficulty**: Advanced
 
-### Checking if seccomp is enabled:
+> **Time**: Approximately 20 minutes
 
-In the kernel:
+seccomp is a sandboxing facility in the Linux kernel that acts like a firewall for system calls (syscalls). It uses Berkeley Packet Filter (BPF) rules to filter syscalls and control how they are handled. These filters can significantly limit a containers access to the Docker Host's Linux kernel - especially for simple containers/applications.
 
-```
-$ grep SECCOMP /boot/config-$(uname -r) # or zgrep SECCOMP /proc/config.gz
-CONFIG_SECCOMP=y
-CONFIG_SECCOMP_FILTER=y
-```
+You will complete the following steps as part of this lab.
 
-In docker:
+- [Step 1 - Clone the labs GitHub repo](#clone)
+- [Step 2 - Test a seccomp profile](#test)
+- [Step 3 - Run a container with no seccomp profile](#no-default)
+- [Step 4 - Selectively remove syscalls](#chmod)
+- [Step 5 - Write a seccomp profile](#write)
+- [Step 6 - A few Gotchas](#gotchas)
 
-```
-$ docker run --rm alpine grep Seccomp /proc/self/status
-```
+# Prerequisites
 
-In docker 1.12:
+You will need all of the following to complete this lab:
 
-```
-$ docker info
-```
+- A Linux-based Docker Host with seccomp enabled
+- Docker 1.10 or higher (preferably 1.12 or higher)
+
+The following commands show you how to check if seccomp is enabled in your system's kernel:
+
+   Check from Docker 1.12 or higher
+   ```
+   $ docker version | grep seccomp
+   Security Options: apparmor seccomp   
+   ```
+   If the above output does not return a line with `seccomp` then your system does not have seccomp enabled in its kernel.
+
+   Check from the Linux command line   
+   ```
+   $ grep SECCOMP /boot/config-$(uname -r)
+   CONFIG_HAVE_ARCH_SECCOMP_FILTER=y
+   CONFIG_SECCOMP_FILTER=y
+   CONFIG_SECCOMP=y
+   ```
 
 ### Seccomp and Docker
 
-The original seccomp was what's now called "strict mode" where the only system calls allowed are `read`, `write`, `_exit` and `sigreturn`. This is not useful for docker containers because all docker programs need many other system calls just to initialize, load dynamic libraries, etc. The mode used by docker is called "filter mode". It uses BPF filters to control exactly which system calls to allow.
+Docker has used seccomp since version 1.10 of the Docker Engine.
 
-Docker has a JSON based DSL which allows defining seccomp profiles that compile down to seccomp filters. Profiles are passed to the `--run` command with the following flag:
+Docker uses seccomp in *filter mode* and has its own JSON-based DSL that allows you to define *profiles* that compile down to seccomp filters. When you run a container it gets the default seccomp profile unless you override this by passing the `--security-opt` flag to the `docker run` command.
 
-```
---security-opt seccomp=profile.json
-```
+The following example command starts an interactive container based off the Alpine image and starts a shell process. It also applies the `default.json` seccomp profile to it.
 
-The JSON file is sent from the Docker client to the Docker daemon and the docker daemon
-compiles it into a BPF program using a thin go wrapper around libseccomp: github.com/seccomp/libseccomp-golang.
+   ```
+   $ sudo docker run -it --rm --security-opt seccomp=default.json alpine sh ...
+   ```
 
-The best way to test the effect of your seccomp profiles is to add all capabilities and disable apparmor.
-The following example uses one of the profiles included in this guide to show how to prevent a program from making any system calls at all.
-This is a reliable way to make sure your seccomp profile is enforced.
+The above command sends the JSON file from the client to the daemon where it is compiled into a BPF program using a [thin Go wrapper around libseccomp](https://github.com/seccomp/libseccomp-golang).
 
-```
-$ docker run --rm -it --cap-add ALL --security-opt apparmor=unconfined --security-opt seccomp=seccomp-profiles/deny.json alpine sh
-```
+Docker seccomp profiles operate a whitelist approach that specifies allowed syscalls. All syscalls not on the whitelist are not permitted.
 
-### Writing a seccomp profile
+Docker supports many security related technologies. It is possible for other security related technologies to interfere with your testing of seccomp profiles. For this reason, the best way to test the effect of seccomp profiles is to add all *capabilities* and disable *apparmor*. This gives you the confidence that any changes you implement through seccomp are not tainted by *capabilities* and *apparmor*.
 
-The layout of a docker seccomp profile looks like this:
+The following `docker run` flags add all *capabilities* and disable *apparmor*: `--cap-add ALL --security-opt apparmor=unconfined`.
+
+# <a name="clone"></a>Step 1: Clone the labs GitHub repo
+
+In this step you will clone the lab's GitHub repo so that you have the seccomp profiles that you will use for the remainder of this lab.
+
+1. Clone the labs GitHub repo.
+
+   ```
+   $ git clone https://github.com/riyazdf/dockercon-workshop
+   ```
+
+2. Change into the `dockercon-workshop/seccomp` directory.
+
+   ```
+   $ cd dockercon-workshop/seccomp
+   ```
+
+The remaining steps in this lab will assume that you are running commands from this `dockercon-workshop/seccomp` directory. This will be important when referencing the seccomp profiles on the various `docker run` commands throughout the lab.
+
+# <a name="test"></a>Step 2: Test a seccomp profile
+
+> **NOTE TO LAB OWNER:  THIS STEP DOES NOT CURRENTLY WORK. I'M GUESSING THIS IS BECAUSE THE SECCOMP PROFILE IS APPLIED BEFORE THE CONTAINER IS STARTED AS PER GITHUB ISSUES CITED LATER IN THE LAB GUIDE. I'M LEAVING IT IN FOR THE TIME BEING (NIGELPOULTON@HOTMAIL.COM) BUT AM RAISING THE QUESTION OF WHETHER IT COULD BE REMOVED IN FAVOUR OF STEP 2 WHICH DEMOS SIMILAR CAPABILITIES**
+
+In this step you will use the `deny.json` seccomp profile included the lab guides repo. This profile has an empty syscall whitelist meaning all syscalls will be blocked. As part of the demo you will add all *capabilities* and effectively disable *apparmor* so that you know that only your seccomp profile is preventing the syscalls.
+
+1. Use the `docker run` command to start a new container with all capabilities added, apparmor unconfined, and the `seccomp-profiles/deny.json` seccomp profile applied. Then try and run the `whoami` command form within the container.
+
+   ```
+   $ sudo docker run --rm -it --cap-add ALL --security-opt apparmor=unconfined --security-opt seccomp=seccomp-profiles/deny.json alpine sh
+
+   / # whoami
+   whoami: /: Operation not permitted
+   ```
+
+2. Exit the container.
+
+3. Inspect the contents of the `seccomp-profiles/deny/json` profile.
+
+   ```
+   $ cat seccomp-profiles/deny.json
+   {
+        "defaultAction": "SCMP_ACT_ERRNO",
+        "architectures": [
+                "SCMP_ARCH_X86_64",
+                "SCMP_ARCH_X86",
+                "SCMP_ARCH_X32"
+        ],
+        "syscalls": [
+        ]
+   }
+   ```
+
+   Notice that there are no **syscalls** in the whitelist. This means that no syscalls will be allowed from containers started with this profile.
+
+In this step you removed *capabilities* and *apparomor* from interfering, and started a new container with a seccomp profile that had no syscalls in its whitelist. You saw how this prevented all syscalls from within the container.
+
+# <a name="no-default"></a>Step 3: Run a container with no seccomp profile
+
+Unless you specify a different profile, Docker will apply the default seccomp profile to all new containers. In this step you will see how to force a new container to run without a seccomp profile.
+
+1. Start a new container with the `--security-opt seccomp=unconfined` flag so that no seccomp profile is applied to it.
+
+   ```
+   $ sudo docker run --rm -it --security-opt seccomp=unconfined alpine sh
+   ```
+
+2. From the terminal of the container run the `whoami` command to confirm that the container works and can make syscalls back to the Docker Host.
+
+   ```
+   / # whoami
+   root
+   ```
+
+3. Exit the container.
+
+4. Run the following `strace` command from your Docker Host to see a list of the syscalls used by the `whoami` program.
+
+   Your Docker Host will need the `strace` package installed.
+
+   ```
+   $ strace -c -f -S name whoami 2>&1 1>/dev/null | tail -n +3 | head -n -2 | awk '{print $(NF)}'
+   access
+   arch_prctl
+   brk
+   close
+   connect
+   execve
+   <SNIP>
+   socket
+   write
+   ```
+
+  You can also run the following simpler command and get a more verbose output.
+
+   ```
+   $ strace whoami
+   execve("/usr/bin/whoami", ["whoami", "-qq"], [/* 21 vars */]) = 0
+   brk(0)                                  = 0x1980000
+   <SNIP>
+   ```
+
+   You can substitute **whoami** for any other program.
+
+In this step you started a new container with no seccomp profile and verified that the `whoami` program could execute. You also used the `strace` program to list the syscalls made by a particular run of the `whoami` program.
+
+# <a name="chmod"></a>Step 4: Selectively remove syscalls
+
+In this step you will see how applying changes to the `default.json` profile can be a good way to fine-tune which syscalls are available to containers.
+
+The `default-no-chmod.json` profile is a modification of the `default.json` profile with the `chmod()`, `fchmod()`, and `chmodat()` syscalls removed from its whitelist.
+
+1. Start a new container with the `default-no-chmod.json` profile and attempt to run the `chmod 777 / -v` command.
+
+   ```
+   $ sudo docker run --rm -it --security-opt seccomp=default-no-chmod.json alpine sh
+
+   / # chmod 777 / -v
+   chmod: /: Operation not permitted
+   ```
+
+  The command fails because the `chmod 777 / -v` command uses some of the `chmod()`, `fchmod()`, and `chmodat()` syscalls that have been removed from the whitelist of the `default-no-chmod.json` profile.
+
+2. Exit the container.
+
+3. Start another new container with the `default.json` profile and run the same `chmod 777 / -v`.
+
+   ```
+   $ sudo docker run --rm -it --security-opt seccomp=default.json alpine sh
+
+   / # chmod 777 / -v
+   mode of '/' changed to 0777 (rwxrwxrwx)
+   ```
+
+  The command succeeds this time because the `default.json` profile has the `chmod()`, `fchmod()`, and `chmodat` syscalls included in its whitelist.
+
+4. Exit the container.  
+
+5. Check both profiles for the presence of the `chmod()`, `fchmod()`, and `chmodat()` syscalls.
+
+   Be sure to perform these commands from the command line of you Docker Host and not from inside of the container created in the previous step.
+
+   ```
+   $ cat ./seccomp-profiles/default.json | grep chmod
+   "name": "chmod",
+   "name": "fchmod",
+   "name": "fchmodat",
+
+   $ cat ./deccomp-profiles/default-no-chmod.json | grep chmod
+   ```
+
+   The output above shows that the `default-no-chmod.json` profile contains no **chmod** related syscalls in the whitelist.
+
+In this step you saw how removing particular syscalls from the `default.json` profile can be a powerful way to start fine tuning the security of your containers.
+
+# <a name="write"></a>Step 5: Write a seccomp profile
+
+It is possible to write Docker seccomp profiles from scratch. You can also edit existing profiles. In this step you will learn about the syntax and behavior of Docker seccomp profiles.
+
+The layout of a Docker seccomp profile looks like the following:
 
 ```
 {
@@ -81,12 +245,12 @@ The layout of a docker seccomp profile looks like this:
 }
 ```
 
-The most authoritative source for how to write a docker seccomp profile is the structs used to deserialize the json.
+The most authoritative source for how to write Docker seccomp profiles is the structs used to deserialize the JSON.
 
 * https://github.com/docker/engine-api/blob/c15549e10366236b069e50ef26562fb24f5911d4/types/seccomp.go
 * https://github.com/opencontainers/runtime-spec/blob/master/specs-go/config.go#L357
 
-The possible actions in order of precedence (higher actions overrule lower actions):
+The table below lists the possible *actions* in order of precedence. Higher actions overrule lower actions.
 
 | Action         | Description                                                              |
 |----------------|--------------------------------------------------------------------------|
@@ -96,7 +260,7 @@ The possible actions in order of precedence (higher actions overrule lower actio
 | SCMP_ACT_TRACE | Invoke a ptracer to make a decision or set `errno` to `-ENOSYS`          |
 | SCMP_ACT_ALLOW | Allow                                                                    |
 
-The most important ones for docker users are `SCMP_ACT_ERRNO` and `SCMP_ACT_ALLOW`.
+The most important actions for Docker users are `SCMP_ACT_ERRNO` and `SCMP_ACT_ALLOW`.
 
 Profiles can contain more granular filters based on the value of the arguments to the system call.
 
@@ -128,49 +292,48 @@ Profiles can contain more granular filters based on the value of the arguments t
     * SCMP_CMP_EQ - equal to
     * SCMP_CMP_GE - greater than
     * SCMP_CMP_GT - greater or equal to
-    * SCMP_CMP_MASKED_EQ - masked equal: true iff `(value & arg == valueTwo)`
+    * SCMP_CMP_MASKED_EQ - masked equal: true if `(value & arg == valueTwo)`
 * `value` is a parameter for the operation
 * `valueTwo` is used only for SCMP_CMP_MASKED_EQ
 
-The rule matches if **all** args match. To achieve the effect of an or, add multiple rules.
+The rule only matches if **all** args match. Add multiple rules to achieve the effect of an OR.   << **NOTE TO LAB OWNER: IS THAT STATEMENT CORRECT?**
 
-Strace can be used to get a list of all system calls made by a program.
+`Strace` can be used to get a list of all system calls made by a program.
 It's a very good starting point for writing seccomp policies.
 Here's an example of how we can list all system calls made by `ls`:
 
 ```
 $ strace -c -f -S name ls 2>&1 1>/dev/null | tail -n +3 | head -n -2 | awk '{print $(NF)}'
+access
+arch_prctl
+brk
+close
+execve
+<SNIP>
+statfs
+write
 ```
 
-### Demo
+The output above shows all of the syscalls that will need enabling for a container running the `ls` program to work.
 
-By copying the default docker profile and then removing system calls selectively we can show that we are able to intercept system calls with seccomp. For this demo we've removed chmod, fchmod and chmodat from the default profile.
+In this step you learned the format and syntax of Docker seccomp profiles. You also learned the order of preference for actions, as well as how to determine the syscalls needed by an individual program.
 
-```
-$ docker run --rm -it --security-opt seccomp=default-no-chmod.json alpine chmod 777 /
-```
+# <a name="test"></a>Step 6: A few gotchas
 
-### Gotchas
+The remainder of this lab will walk you through a few things that are easy to miss when using seccomp with Docker.
 
-There are some things that you can easily miss when using seccomp with docker.
+#### Timing of a seccomp profile application
 
-#### Timing of application of seccomp policies
+In versions of Docker prior to 1.12, seccomp polices tended to be applied very early in the container creation process. This resulted in you needing to add syscalls to your profile that were required for the container creation process but not required by your container. This was not ideal. See:
 
-In versions before 1.12 seccomp polices tend to be applied too soon.
-This means that you may need to add system calls that your application doesn't use in order for the container to be started successfully.
-This behavior hasn't been thoroughly documented yet. See: https://github.com/docker/docker/issues/22252 https://github.com/opencontainers/runc/pull/789
+- https://github.com/docker/docker/issues/22252
+- https://github.com/opencontainers/runc/pull/789
 
-The best way to avoid this issue is to use
-
-```
---security-opt no-new-privileges
-```
-
-Note that this also disables gaining privileges through setuid binaries.
+A good way to avoid this issue can be to use the `--security-opt no-new-privileges` flag when starting your container. However, this will also prevent you from gaining privileges through `setuid` binaries.
 
 #### Truncation
 
-When writing a seccomp filter sometimes arguments are truncated by the operating system after the filter has run, so you have to be careful how you write your filters.
+When writing a seccomp filter, arguments can sometimes be truncated by the operating system after the filter has run. This means you need to be careful how you write your filters.
 
 > When checking values from args against a blacklist, keep in mind that
 > arguments are often silently truncated before being processed, but
@@ -185,47 +348,37 @@ When writing a seccomp filter sometimes arguments are truncated by the operating
 
 https://www.kernel.org/doc/Documentation/prctl/seccomp_filter.txt
 
-#### Seccomp escapes
+#### seccomp escapes
 
-* Syscall numbers are architecture dependant, so raw BPF filters are not very portable.
-Luckily docker abstract this issue away, so you don't need to worry about it if using docker seccomp profiles.
+Syscall numbers are architecture dependant. This limits the portability of BPF filters. Fortunately Docker profiles abstract this issue away, so you don't need to worry about it if using Docker seccomp profiles.
 
-* ptrace is disabled by default and you should not enable it because it allows bypassing seccomp.
-You can use this script to test for seccomp escapes through ptrace:
-https://gist.github.com/thejh/8346f47e359adecd1d53
+`ptrace` is disabled by default and you should avoid enabling it. This is because it allows bypassing of seccomp. You can use [this script](https://gist.github.com/thejh/8346f47e359adecd1d53) to test for seccomp escapes through `ptrace`.
 
-#### Differences between docker versions
+#### Differences between Docker versions
 
 * Seccomp is supported as of Docker 1.10.
 
-* Using `--privileged` disables seccomp in all versions of docker even if you specify a seccomp profile with it.
-In general you should try to avoid ever using `--privileged` because it does too many things.
-You can achieve the same goal with `--cap-add ALL --security-opt apparmor=unconfined --security-opt seccomp=unconfined`.
-If you need access to devices use `--device`.
+* Using the `--privileged` flag when creating a container disables seccomp in all versions of docker - even if you explicitly specify a seccomp profile. In general you should avoid using the `--privileged` flag as it does too many things. You can achieve the same goal with `--cap-add ALL --security-opt apparmor=unconfined --security-opt seccomp=unconfined`. If you need access to devices use `--device`.
 
-* In docker 1.10-1.12+ docker exec `--privileged` does not bypass seccomp. This may change in future versions https://github.com/docker/docker/issues/21984
+* In docker 1.10-1.12 `docker exec --privileged` does not bypass seccomp. This may change in future versions https://github.com/docker/docker/issues/21984.
 
-* In docker 1.12+ adding a capability disables the relevant seccomp filter in the default seccomp profile. It can't disable apparmor, though.
+* In docker 1.12 and later, adding a capability disables the relevant seccomp filter in the default seccomp profile. However, it does not disable apparmor.
 
 ### Using multiple filters
 
-The only way to use multiple seccomp filters right now is to load addition filters within your program at run time.
-The kernel supports layering filters.
-When using multiple layered filters they are always all executed, starting with the most recently added.
-The highest precedence action returned is taken.
-See the man page for all the details: http://man7.org/linux/man-pages/man2/seccomp.2.html
+The only way to use multiple seccomp filters, as of Docker 1.12, is to load additional filters within your program at runtime. The kernel supports layering filters.
+
+When using multiple layered filters, all filters are always executed starting with the most recently added. The highest precedence action returned is taken. See the man page for all the details: http://man7.org/linux/man-pages/man2/seccomp.2.html
 
 ### Misc
 
-You can enable JITing of BPF filters (if it isn't already enabled) this way:
+You can enable JITing of BPF filters (if it isn't already enabled) with the following command:
 
 ```
 $ echo 1 > /proc/sys/net/core/bpf_jit_enable
 ```
 
-There is no easy to use seccomp in a mode that reports errors without crashing the program, but it's possible to implement in one of several ways.
-One way to do this is to use SCMP_ACT_TRAP and make your process handle SIGSYS and report the error in a useful way.
-There's some information about how Firefox handles seccomp violations here: https://wiki.mozilla.org/Security/Sandbox/Seccomp
+There is no easy way to use seccomp in a mode that reports errors without crashing the program. However, there are several round-about ways to accomplish this. One such way is to use SCMP_ACT_TRAP and write your code to handle SIGSYS and report the errors in a useful way. Here is some information on [how Firefox handles seccomp violations](https://wiki.mozilla.org/Security/Sandbox/Seccomp).
 
 ### Further reading:
 
