@@ -24,7 +24,7 @@ You will complete the following steps as part of this lab.
 
 You will need all of the following to complete this lab:
 
-- A Linux-based Docker Host with AppArmor enabled in the kernel
+- A Linux-based Docker Host with AppArmor enabled in the kernel (most Debian-based distros)
 - Docker 1.12 or higher
 
 The following command shows you how to check if AppArmor is enabled in your system's kernel:
@@ -45,7 +45,7 @@ Here are some quick pointers for how to understand AppArmor profiles:
 
   - `Include` statements, such as `#include <abstractions/base>`, behave just like their `C` counterparts by expanding to additional AppArmor profile contents.
 
-  - AppArmor `deny` rules are evaluated first and have precedence over `allow` and `owner` rules. This means that deny rules cannot be overridden by subsequent allow or owner rules for the same resource.
+  - AppArmor `deny` rules have precedence over `allow` and `owner` rules. This means that `deny` rules cannot be overridden by subsequent `allow` or `owner` rules for the same resource. Moreover, an `allow` will be overridden by a subsequent `deny` on the same resource
 
   - For file operations, `r` corresponds to read, `w` to write, `k` to lock, `l` to link, and `x` to execute.
 
@@ -326,35 +326,11 @@ mysql:
 8. Click **Plugins** from the left-hand navigation pane and install a plugin.
 
    You should notice that the `docker-default` AppArmor prfile does not restrict the plugin installation.
-
-9. Get the name of the WordPress container that is running as part of your WordPress app.
-
-   ```
-   $ sudo docker-compose ps
-   Name                      Command              State            Ports
-   --------------------------------------------------------------------------------------
-   wordpress_mysql_1       /docker-entrypoint.sh mysqld   Up      0.0.0.0:32769->3306/tcp
-   wordpress_wordpress_1   apache2-foreground             Up      0.0.0.0:8080->80/tcp
-   ```
-
-   The container that you want is named `wordpress_wordpress_1`.
-
-10. Get shell access into the container.
-
-   ```
-   $ sudo docker exec -it wordpress_wordpress_1 bash
-   root@b695d2439221:/var/www/html#
-   ```
-
-11. Attempt to gain access to the Docker Hosts underlying filesystem.
-
-   **NOTE TO LAB OWNER: NEED INFO ON HOW A LAB USER MIGHT TRY THIS???**
-
-12. Exit the container.
+   We could be exposed to malicious plugins like in the Panama Papers incident!
 
 In the next few steps you'll apply a new Apparmor profile to a new WordPress container. The purpose of this is to prevent malicious themes and plugins from being uploaded and installed on our WordPress instance.
 
-13. Bring the WordPress application down.
+9. Bring the WordPress application down.
 
    Run this command from the shell of your Docker Host, not the shell of the `wordpress` container.
 
@@ -368,7 +344,7 @@ In the next few steps you'll apply a new Apparmor profile to a new WordPress con
    Removing wordpress_mysql_1 ... done
    ```
 
-14. Add the `wparmor` profile to the `wordpress` service in the `docker-compose.yml` file.
+10. Add the `wparmor` profile to the `wordpress` service in the `docker-compose.yml` file.
 
    ```
    wordpress:
@@ -392,7 +368,7 @@ In the next few steps you'll apply a new Apparmor profile to a new WordPress con
    **security_opt:**
        - **apparmor=wparmor**
 
-15. Edit the `wparmor` profile to deny every directory under `/var/www/html/wp-content` except for the `uploads` directory (which is used for media).  
+11. Edit the `wparmor` profile to deny every directory under `/var/www/html/wp-content` except for the `uploads` directory (which is used for media).
 
    To do this, add the following three lines towards the bottom of the file where it says "**YOUR WORK HERE**".
 
@@ -402,15 +378,15 @@ In the next few steps you'll apply a new Apparmor profile to a new WordPress con
    owner /var/www.html/wp-content/uploads/** rw,
    ```
 
-   The `*` wildcard is only for files at a single level. The `**` wildcard will traverse subdirectories.  
+   The `*` wildcard is only for files at a single level. The `**` wildcard will traverse subdirectories.
 
-16. Parse the `wparmor` profile.  
+12. Parse the `wparmor` profile.
 
    ```
    $ sudo apparmor_parser wparmor
    ```
 
-18. Bring the Docker Compose WordPress app back up.
+13. Bring the Docker Compose WordPress app back up.
 
    ```
    $ sudo docker-compose up &
@@ -424,7 +400,7 @@ In the next few steps you'll apply a new Apparmor profile to a new WordPress con
    wordpress_1  | [Tue Jul 26 12:51:36.992956 2016] [core:notice] [pid 1] AH00094: Command line: 'apache2 -D FOREGROUND'
    ```
 
-19. Verify that the app is up.
+14. Verify that the app is up.
 
    ```
    $ sudo docker-compose ps
@@ -434,9 +410,9 @@ In the next few steps you'll apply a new Apparmor profile to a new WordPress con
    wordpress_wordpress_1   apache2-foreground             Up      0.0.0.0:8080->80/tcp
    ```
 
-20. Test that the AppArmor profile is working by uploading an image to the site via the WordPress UI and then trying to upload a plugin. The image upload will work but the plugin upload will fail (when the usual method for uploading plugins fails, WordPress prompts you to upload via FTP - this is a sign that the AppArmor profile has worked).
+15. Test that the AppArmor profile is working by uploading an image to the site via the WordPress UI and then trying to upload a plugin. The image upload will work but the plugin upload will fail (when the usual method for uploading plugins fails, WordPress prompts you to upload via FTP - this is a sign that the AppArmor profile has worked).
 
-21. Bring the application down.
+16. Bring the application down.
 
    ```
    $ sudo docker-compose down
@@ -449,8 +425,6 @@ Congratulations!  You've secured a WordPress instance against adding malicious p
 AppArmor profiles are very application-specific. Although we've had some practice writing our own profiles, the preferred method is using tools to generate and debug them. In this step We'll explore `aa-complain` and `aa-genprof` that ship as part of the `apparmor-utils` package.
 
 The following steps assume you are using a modern Ubuntu Linux Docker Host with a GUI installed and the FireFox web browser.
-
-**NOTE TO LAB OWNER: WILL THE ABOVE PRE_REQ BE THE CASE IN DOCKERCON LABS?**
 
 1.  Install the `apparmor-utils` package.
 
