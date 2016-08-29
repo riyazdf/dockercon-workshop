@@ -1,6 +1,3 @@
-# dockercon-workshop
-#### Dockercon 2016 Security Workshop
-
 # Lab: Capabilities
 
 > **Difficulty**: Advanced

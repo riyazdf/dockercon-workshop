@@ -1,4 +1,4 @@
-# Lab 2: Control Groups (cgroups)
+# Lab: Control Groups (cgroups)
 
 > **Difficulty**: Intermediate
 
