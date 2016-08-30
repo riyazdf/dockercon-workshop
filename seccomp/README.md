@@ -1,7 +1,4 @@
-# dockercon-workshop
-#### Dockercon 2016 Security Workshop
-
-# Lab: seccomp
+# Lab: Seccomp
 
 > **Difficulty**: Advanced
 
@@ -56,9 +53,9 @@ The following example command starts an interactive container based off the Alpi
 
 The above command sends the JSON file from the client to the daemon where it is compiled into a BPF program using a [thin Go wrapper around libseccomp](https://github.com/seccomp/libseccomp-golang).
 
-Docker seccomp profiles operate a whitelist approach that specifies allowed syscalls. All syscalls not on the whitelist are not permitted.
+Docker seccomp profiles operate using a whitelist approach that specifies allowed syscalls. *Only* syscalls on the whitelist are permitted.
 
-Docker supports many security related technologies. It is possible for other security related technologies to interfere with your testing of seccomp profiles. For this reason, the best way to test the effect of seccomp profiles is to add all *capabilities* and disable *apparmor*. This gives you the confidence that any changes you implement through seccomp are not tainted by *capabilities* and *apparmor*.
+Docker supports many security related technologies. It is possible for other security related technologies to interfere with your testing of seccomp profiles. For this reason, the best way to test the effect of seccomp profiles is to add all *capabilities* and disable *apparmor*. This gives you the confidence the behavior you see in the following steps is solely due to seccomp changes.
 
 The following `docker run` flags add all *capabilities* and disable *apparmor*: `--cap-add ALL --security-opt apparmor=unconfined`.
 
@@ -86,18 +83,16 @@ The remaining steps in this lab will assume that you are running commands from t
 
 In this step you will use the `deny.json` seccomp profile included the lab guides repo. This profile has an empty syscall whitelist meaning all syscalls will be blocked. As part of the demo you will add all *capabilities* and effectively disable *apparmor* so that you know that only your seccomp profile is preventing the syscalls.
 
-1. Use the `docker run` command to start a new container with all capabilities added, apparmor unconfined, and the `seccomp-profiles/deny.json` seccomp profile applied. Then try and run the `whoami` command form within the container.
+1. Use the `docker run` command to try to start a new container with all capabilities added, apparmor unconfined, and the `seccomp-profiles/deny.json` seccomp profile applied.
 
    ```
    $ sudo docker run --rm -it --cap-add ALL --security-opt apparmor=unconfined --security-opt seccomp=seccomp-profiles/deny.json alpine sh
-
-   / # whoami
-   whoami: /: Operation not permitted
+   docker: Error response from daemon: exit status 1: "cannot start a container that has run and stopped\n".
    ```
 
-2. Exit the container.
+In this scenario, Docker doesn't actually have enough syscalls to start the container!
 
-3. Inspect the contents of the `seccomp-profiles/deny/json` profile.
+2. Inspect the contents of the `seccomp-profiles/deny/json` profile.
 
    ```
    $ cat seccomp-profiles/deny.json
@@ -115,28 +110,35 @@ In this step you will use the `deny.json` seccomp profile included the lab guide
 
    Notice that there are no **syscalls** in the whitelist. This means that no syscalls will be allowed from containers started with this profile.
 
-In this step you removed *capabilities* and *apparomor* from interfering, and started a new container with a seccomp profile that had no syscalls in its whitelist. You saw how this prevented all syscalls from within the container.
+In this step you removed *capabilities* and *apparmor* from interfering, and started a new container with a seccomp profile that had no syscalls in its whitelist. You saw how this prevented all syscalls from within the container or to let it start in the first place.
 
 # <a name="no-default"></a>Step 3: Run a container with no seccomp profile
 
-Unless you specify a different profile, Docker will apply the default seccomp profile to all new containers. In this step you will see how to force a new container to run without a seccomp profile.
+Unless you specify a different profile, Docker will apply the [default seccomp profile](https://github.com/docker/docker/blob/master/profiles/seccomp/default.json) to all new containers. In this step you will see how to force a new container to run without a seccomp profile.
 
 1. Start a new container with the `--security-opt seccomp=unconfined` flag so that no seccomp profile is applied to it.
 
    ```
-   $ sudo docker run --rm -it --security-opt seccomp=unconfined alpine sh
+   $ sudo docker run --rm -it --security-opt seccomp=unconfined debian:jessie sh
    ```
 
-2. From the terminal of the container run the `whoami` command to confirm that the container works and can make syscalls back to the Docker Host.
+2. From the terminal of the container run a `whoami` command to confirm that the container works and can make syscalls back to the Docker Host.
 
    ```
    / # whoami
    root
    ```
 
-3. Exit the container.
+3. To prove that we are not running with the default seccomp profile, try running a `unshare` command, which creates a new namespace:
+  ```
+  / # unshare --map-root-user --user
+  / # whoami
+  root
+  ```
 
-4. Run the following `strace` command from your Docker Host to see a list of the syscalls used by the `whoami` program.
+4. Exit the container.
+
+5. Run the following `strace` command from your Docker Host to see a list of the syscalls used by the `whoami` program.
 
    Your Docker Host will need the `strace` package installed.
 
@@ -296,9 +298,9 @@ Profiles can contain more granular filters based on the value of the arguments t
 * `value` is a parameter for the operation
 * `valueTwo` is used only for SCMP_CMP_MASKED_EQ
 
-The rule only matches if **all** args match. Add multiple rules to achieve the effect of an OR.   << **NOTE TO LAB OWNER: IS THAT STATEMENT CORRECT?**
+The rule only matches if **all** args match. Add multiple rules to achieve the effect of an OR. 
 
-`Strace` can be used to get a list of all system calls made by a program.
+`strace` can be used to get a list of all system calls made by a program.
 It's a very good starting point for writing seccomp policies.
 Here's an example of how we can list all system calls made by `ls`:
 
@@ -314,7 +316,7 @@ statfs
 write
 ```
 
-The output above shows all of the syscalls that will need enabling for a container running the `ls` program to work.
+The output above shows the syscalls that will need to be enabled for a container running the `ls` program to work, in addition to the syscalls required to start a container.
 
 In this step you learned the format and syntax of Docker seccomp profiles. You also learned the order of preference for actions, as well as how to determine the syscalls needed by an individual program.
 
@@ -329,11 +331,11 @@ In versions of Docker prior to 1.12, seccomp polices tended to be applied very e
 - https://github.com/docker/docker/issues/22252
 - https://github.com/opencontainers/runc/pull/789
 
-A good way to avoid this issue can be to use the `--security-opt no-new-privileges` flag when starting your container. However, this will also prevent you from gaining privileges through `setuid` binaries.
+A good way to avoid this issue in Docker 1.12+ can be to use the `--security-opt no-new-privileges` flag when starting your container. However, this will also prevent you from gaining privileges through `setuid` binaries.
 
 #### Truncation
 
-When writing a seccomp filter, arguments can sometimes be truncated by the operating system after the filter has run. This means you need to be careful how you write your filters.
+When writing a seccomp filter, there may be unused or randomly set bits on 32-bit arguments when using a 64-bit operating system after the filter has run.
 
 > When checking values from args against a blacklist, keep in mind that
 > arguments are often silently truncated before being processed, but
@@ -350,7 +352,7 @@ https://www.kernel.org/doc/Documentation/prctl/seccomp_filter.txt
 
 #### seccomp escapes
 
-Syscall numbers are architecture dependant. This limits the portability of BPF filters. Fortunately Docker profiles abstract this issue away, so you don't need to worry about it if using Docker seccomp profiles.
+Syscall numbers are architecture dependent. This limits the portability of BPF filters. Fortunately Docker profiles abstract this issue away, so you don't need to worry about it if using Docker seccomp profiles.
 
 `ptrace` is disabled by default and you should avoid enabling it. This is because it allows bypassing of seccomp. You can use [this script](https://gist.github.com/thejh/8346f47e359adecd1d53) to test for seccomp escapes through `ptrace`.
 
@@ -358,11 +360,11 @@ Syscall numbers are architecture dependant. This limits the portability of BPF f
 
 * Seccomp is supported as of Docker 1.10.
 
-* Using the `--privileged` flag when creating a container disables seccomp in all versions of docker - even if you explicitly specify a seccomp profile. In general you should avoid using the `--privileged` flag as it does too many things. You can achieve the same goal with `--cap-add ALL --security-opt apparmor=unconfined --security-opt seccomp=unconfined`. If you need access to devices use `--device`.
+* Using the `--privileged` flag when creating a container with `docker run` disables seccomp in all versions of docker - even if you explicitly specify a seccomp profile. In general you should avoid using the `--privileged` flag as it does too many things. You can achieve the same goal with `--cap-add ALL --security-opt apparmor=unconfined --security-opt seccomp=unconfined`. If you need access to devices use `--device`.
 
 * In docker 1.10-1.12 `docker exec --privileged` does not bypass seccomp. This may change in future versions https://github.com/docker/docker/issues/21984.
 
-* In docker 1.12 and later, adding a capability disables the relevant seccomp filter in the default seccomp profile. However, it does not disable apparmor.
+* In docker 1.12 and later, adding a capability may enable some appropriate system calls in the default seccomp profile. However, it does not disable apparmor.
 
 ### Using multiple filters
 
